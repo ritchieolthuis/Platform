@@ -1,0 +1,5 @@
+{
+  "name": "Medium Reader Clone",
+  "description": "A 1:1 Medium UI clone that formats articles and PDFs with automatic key-sentence highlighting for improved readability.",
+  "requestFramePermissions": []
+}
