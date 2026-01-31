@@ -3,16 +3,15 @@ import { getFirestore, doc, setDoc, getDoc, collection, getDocs, query, orderBy,
 import { ArticleData, User } from '../types';
 
 // --- Configuration ---
-// Note: In a production environment, these should come from process.env
-// For this specific 1:1 clone request, we use placeholders or injected env vars.
-// The app will gracefully fallback to console warnings if keys are missing.
+// Updated with specific project credentials to resolve initialization error
 const firebaseConfig = {
-  apiKey: (window as any).process?.env?.FIREBASE_API_KEY || "YOUR_API_KEY",
-  authDomain: (window as any).process?.env?.FIREBASE_AUTH_DOMAIN || "YOUR_PROJECT.firebaseapp.com",
-  projectId: (window as any).process?.env?.FIREBASE_PROJECT_ID || "YOUR_PROJECT_ID",
-  storageBucket: (window as any).process?.env?.FIREBASE_STORAGE_BUCKET || "YOUR_PROJECT.appspot.com",
-  messagingSenderId: (window as any).process?.env?.FIREBASE_MESSAGING_SENDER_ID || "YOUR_SENDER_ID",
-  appId: (window as any).process?.env?.FIREBASE_APP_ID || "YOUR_APP_ID"
+  apiKey: "AIzaSyAXzFXDk-VIMIl3HqcFlg878_lHbpRCYz8",
+  authDomain: "platform-c2b92.firebaseapp.com",
+  projectId: "platform-c2b92",
+  storageBucket: "platform-c2b92.firebasestorage.app",
+  messagingSenderId: "156168372139",
+  appId: "1:156168372139:web:508ce45f6fe82bd05a9cee",
+  measurementId: "G-LDJSSVRTXX"
 };
 
 let db: any = null;
