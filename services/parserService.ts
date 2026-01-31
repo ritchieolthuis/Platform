@@ -1,4 +1,6 @@
-import { ProcessorResponse, HighlightOptions, SourceType, WritingStyle, FaqItem, ReadingLevel } from '../types';
+
+
+import { ProcessorResponse, HighlightOptions, SourceType, WritingStyle, FaqItem, ReadingLevel, Citation } from '../types';
 import { GoogleGenAI } from "@google/genai";
 import * as ReadabilityMod from '@mozilla/readability';
 import * as pdfjsLib from 'pdfjs-dist';
@@ -30,7 +32,7 @@ const STYLE_INSTRUCTIONS: Record<WritingStyle, string> = {
 const LEVEL_INSTRUCTIONS: Record<ReadingLevel, string> = {
     beginner: "Target Audience: Beginner. Use simple vocabulary (A2/B1), short sentences, and explain every concept clearly.",
     intermediate: "Target Audience: Intermediate. Use standard professional vocabulary. Assume basic knowledge but explain nuances.",
-    expert: "Target Audience: Expert. Use technical jargon where appropriate. Focus on high-level synthesis and complex details."
+    expert: "Target Audience: Academic/Expert. **CRITICAL:** High information density. Use original terminology (e.g. Ancient Greek/Latin terms in parentheses). Include extensive footnotes/citations context. Do not simplify complex concepts; explain them with rigor. Structure like a formal academic analysis or deep-investigative journalism."
 };
 
 // --- HELPER: CLEAN MARKDOWN ARTIFACTS ---
@@ -50,7 +52,7 @@ function cleanMarkdownArtifacts(html: string): string {
 // --- System Instruction (The Brain) ---
 // Note: This instruction is strictly for Article Generation, not the Chatbot.
 const getSmartReadingInstruction = (style: WritingStyle, level: ReadingLevel, targetLanguage: string, sourceName?: string) => `
-You are an expert editor. Your task is to extract the CORE content from the provided source text and rewrite it into a clean HTML article.
+You are an expert editor and academic researcher. Your task is to extract the CORE content from the provided source text and rewrite it into a clean HTML article.
 
 **CRITICAL RULES:**
 1. **LANGUAGE:** You MUST write the output article in **${targetLanguage}**, regardless of the source language. Translate if necessary.
@@ -70,7 +72,15 @@ You are an expert editor. Your task is to extract the CORE content from the prov
      - **Technical Terms:** Military formations, political systems (Republic, Senate).
    - **DO NOT** target common words.
    - Wrap the **first occurrence** of each term in: \`<span class="explain-term" data-def="Short, simple definition in ${targetLanguage}">Term</span>\`.
-5. **HTML ONLY:** Output pure HTML. No Markdown. Use <h2>, <p>, <ul>, <li>, <b>, <blockquote>, <span class="explain-term">.
+5. **STRICT 1:1 CITATIONS & SOURCES:**
+   - **IN TEXT:** You must identify citations EXACTLY as they appear in the source (e.g., "(Smith, 2020)" or "[1]").
+   - **WRAP:** Wrap the cited text in: \`<span class="smart-citation" data-source="[SOURCE_NAME]">Exact Text From Article</span>\`.
+   - **SOURCE NAMING:** 
+     - If the input is a URL, use the URL as the data-source. 
+     - **If the input is a FILE (PDF/Doc), use the Author Name, Year, or Document Title as the data-source. DO NOT invent a URL.**
+     - Example for PDF: \`data-source="Scholvin, 2016"\`.
+   - **LIST:** Generate a structured list at the end.
+6. **HTML ONLY:** Output pure HTML. No Markdown. Use <h2>, <p>, <ul>, <li>, <b>, <blockquote>, <span class="explain-term">, <span class="smart-citation">.
 
 **MEDIA HANDLING:**
 - Use the provided <iframe> tags if they contain charts or data.
@@ -81,11 +91,13 @@ You are an expert editor. Your task is to extract the CORE content from the prov
 1. \`<citation>...</citation>\` (Source name/URL)
 2. \`<h1>Title</h1>\` (Translate title to ${targetLanguage})
 3. \`<figure>...</figure>\` (Hero Image)
-4. Body Text (With ==highlights== and <span class="explain-term">terms</span>).
-5. \`<faq_section>\` (REQUIRED: Generate 3-5 frequently asked questions and answers based on the article content. Format: <faq_item><question>...</question><answer>...</answer></faq_item>).
+4. Body Text (With ==highlights==, <span class="explain-term">terms</span> and <span class="smart-citation">citations</span>).
+5. \`<citations_list>\` (REQUIRED: List found references. Format: <citation_item><text>Exact In-Text Citation (e.g. (Smith, 2020))</text><source>Author/Title/URL</source></citation_item>).
+6. \`<faq_section>\` (REQUIRED: Generate 3-5 frequently asked questions and answers based on the article content. Format: <faq_item><question>...</question><answer>...</answer></faq_item>).
 
 **STYLE:** ${STYLE_INSTRUCTIONS[style]}
 **COMPLEXITY:** ${LEVEL_INSTRUCTIONS[level]}
+**SOURCE META:** Filename: ${sourceName || 'Unknown'}
 `;
 
 // --- APP KNOWLEDGE BASE (For the AI Chatbot only) ---
@@ -116,7 +128,7 @@ function extractRichMedia(html: string, baseUrlStr: string): string {
         const lowerSrc = src.toLowerCase();
         const lowerAlt = alt.toLowerCase();
         const lowerClass = className.toLowerCase();
-        const junkKeywords = ['logo', 'icon', 'banner', 'button', 'profile', 'avatar', 'adserver', 'doubleclick', 'tracker', 'pixel', 'footer', 'header', 'social', 'spacer', 'transparent'];
+        const junkKeywords = ['logo', 'icon', 'banner', 'button', 'profile', 'avatar', 'adserver', 'doubleclick', 'tracker', 'pixel', 'footer', 'header', 'social', 'spacer', 'transparent', 'placeholder'];
         if (junkKeywords.some(k => lowerSrc.includes(k) || lowerClass.includes(k) || lowerAlt.includes(k))) return true;
         if (width && width < 200) return true; 
         return false;
@@ -169,6 +181,31 @@ function extractRichMedia(html: string, baseUrlStr: string): string {
     return mediaLog;
 }
 
+// --- Helper: Fetch Deep Media (Recursive Look for /images-videos etc) ---
+async function fetchDeepMedia(originalUrl: string): Promise<string> {
+    const suffixes = ['/images-videos', '/gallery', '/photos'];
+    const baseUrl = originalUrl.replace(/\/$/, ""); // Remove trailing slash
+    
+    // Create candidate URLs
+    const candidates = suffixes.map(s => baseUrl + s);
+    
+    let extraMediaLog = "";
+    
+    // Try to fetch all candidates concurrently (soft fail)
+    const results = await Promise.allSettled(candidates.map(url => fetchRawUrlHtml(url)));
+    
+    results.forEach((result, index) => {
+        if (result.status === 'fulfilled') {
+            const html = result.value;
+            // Use strict base URL for relative links in these sub-pages
+            extraMediaLog += `\n\n--- EXTRA MEDIA FOUND IN ${candidates[index]} ---\n`;
+            extraMediaLog += extractRichMedia(html, candidates[index]);
+        }
+    });
+    
+    return extraMediaLog;
+}
+
 export const translateHtml = async (html: string, targetLanguage: string): Promise<string> => {
   const apiKey = (window as any).process?.env?.API_KEY || process.env.API_KEY;
   if (!apiKey) throw new Error("API Key missing");
@@ -176,7 +213,7 @@ export const translateHtml = async (html: string, targetLanguage: string): Promi
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: `Translate the text content of the following HTML to ${targetLanguage}. Keep ALL tags/classes, especially <span class="explain-term" data-def="..."> and <img> and <mark>. HTML: ${html.substring(0, 30000)}`
+      contents: `Translate the text content of the following HTML to ${targetLanguage}. Keep ALL tags/classes, especially <span class="explain-term" data-def="...">, <span class="smart-citation" data-source="..."> and <img> and <mark>. HTML: ${html.substring(0, 30000)}`
     });
     return response.text || html;
   } catch (error) { return html; }
@@ -264,7 +301,15 @@ export const processSource = async (
   try {
     if (type === 'pdf') {
         const base64Data = source.split(',')[1] || source;
-        const pdfData = await pdfModule.getDocument({ data: atob(base64Data) }).promise;
+        // Fix: Convert base64 to Uint8Array for robust PDF.js compatibility
+        const binaryString = window.atob(base64Data);
+        const len = binaryString.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+        
+        const pdfData = await pdfModule.getDocument({ data: bytes }).promise;
         let extractedText = "";
         for (let i = 1; i <= pdfData.numPages; i++) {
             const page = await pdfData.getPage(i);
@@ -305,7 +350,16 @@ export const processSource = async (
     } else {
         const rawHtml = await fetchRawUrlHtml(source);
         const doc = new DOMParser().parseFromString(rawHtml, "text/html");
+        
+        // 1. Extract Media from Main URL
         availableMedia = extractRichMedia(rawHtml, source);
+        
+        // 2. DEEP DIVE: Try to find extra media in standard sub-paths
+        const deepMedia = await fetchDeepMedia(source);
+        if (deepMedia) {
+            availableMedia += deepMedia;
+        }
+
         try {
           const baseUrl = new URL(source);
           doc.querySelectorAll('img').forEach(img => {
@@ -322,14 +376,17 @@ export const processSource = async (
     }
 
     const promptStructure = `
+### SOURCE META
+Filename/Title: ${sourceName}
+
 ### SOURCE CONTEXT (PARSED TEXT)
 ${fullTextContext.substring(0, 1500000)} 
 
 ### RAW HTML VISUALS (FALLBACK FOR COOKIE WALLS)
 ${rawContext.substring(0, 500000)}
 
-### AVAILABLE MEDIA
-${availableMedia.substring(0, 50000)}
+### AVAILABLE MEDIA (INCL. DEEP DIVE EXTRACTS)
+${availableMedia.substring(0, 150000)}
 
 ### KEYWORDS
 ${options.keywords.join(", ")}
@@ -357,6 +414,7 @@ TASK: Rewrite the source content into an article in ${targetLanguage}.
     const citationMatch = generatedHtml.match(/<citation>(.*?)<\/citation>/s);
     if (citationMatch) { citation = citationMatch[1].trim(); generatedHtml = generatedHtml.replace(/<citation>.*?<\/citation>/gs, ''); }
 
+    // Parse FAQ
     let topQuestions: FaqItem[] = [];
     const faqMatch = generatedHtml.match(/<faq_section>(.*?)<\/faq_section>/s);
     if (faqMatch) {
@@ -367,6 +425,25 @@ TASK: Rewrite the source content into an article in ${targetLanguage}.
             if (q && a) topQuestions.push({ question: q[1].trim(), answer: a[1].trim() });
         });
         generatedHtml = generatedHtml.replace(/<faq_section>.*?<\/faq_section>/s, '');
+    }
+
+    // Parse Citations List
+    let smartCitations: Citation[] = [];
+    const citationListMatch = generatedHtml.match(/<citations_list>(.*?)<\/citations_list>/s);
+    if (citationListMatch) {
+        const items = citationListMatch[1].split('</citation_item>');
+        items.forEach((item, index) => {
+             const text = item.match(/<text>(.*?)<\/text>/s);
+             const source = item.match(/<source>(.*?)<\/source>/s);
+             if (text && source) {
+                 smartCitations.push({
+                     id: `cite-${index}`,
+                     text: text[1].trim(),
+                     source: source[1].trim()
+                 });
+             }
+        });
+        generatedHtml = generatedHtml.replace(/<citations_list>.*?<\/citations_list>/s, '');
     }
 
     // Apply Highlighting Style to ==matches==
@@ -400,6 +477,7 @@ TASK: Rewrite the source content into an article in ${targetLanguage}.
       readTime: `${Math.max(1, Math.ceil(plainText.split(' ').length / 200))} min read`,
       thumbnailUrl: thumbnailUrl,
       citation: citation,
+      citations: smartCitations,
       topQuestions: topQuestions
     };
 

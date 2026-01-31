@@ -1,4 +1,5 @@
 
+
 export interface HighlightOptions {
   minLength: number;
   keywords: string[];
@@ -16,6 +17,12 @@ export interface FaqItem {
   answer: string;
 }
 
+export interface Citation {
+  id: string;
+  text: string;
+  source: string; // Author, Year, or Document Page
+}
+
 export interface ArticleData {
   id: string;
   title: string;
@@ -29,6 +36,7 @@ export interface ArticleData {
   sourceUrl?: string; // or filename for PDF
   thumbnailUrl?: string; // Image representing the article
   citation?: string; // Exact 1:1 source citation
+  citations?: Citation[]; // List of specific citations found in text
   topQuestions?: FaqItem[]; // Generated FAQs
 }
 

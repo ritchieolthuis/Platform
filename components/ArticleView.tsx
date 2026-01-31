@@ -1,5 +1,7 @@
+
+
 import React, { useState, useEffect, useRef } from 'react';
-import { ArticleData, FontType, FontSize, PageWidth, HighlightOptions } from '../types';
+import { ArticleData, FontType, FontSize, PageWidth, HighlightOptions, Citation } from '../types';
 import { addCommentToDb, getCommentsFromDb } from '../services/firebase';
 import { fetchAudioForChunk, splitTextIntoChunks, askAiAboutArticle } from '../services/parserService';
 
@@ -48,6 +50,11 @@ interface ChatMessage {
     content: string;
 }
 
+// Extended Citation type for internal use to include target DOM ID
+interface InteractiveCitation extends Citation {
+    targetId?: string;
+}
+
 const ArticleView: React.FC<ArticleViewProps> = ({ 
     data, 
     loading, 
@@ -78,6 +85,10 @@ const ArticleView: React.FC<ArticleViewProps> = ({
   const [activeTerm, setActiveTerm] = useState<ActiveTermState | null>(null);
   const [allTerms, setAllTerms] = useState<Term[]>([]);
   const [showGlossary, setShowGlossary] = useState(false);
+  
+  // Smart Citations State
+  const [showCitations, setShowCitations] = useState(false);
+  const [visibleCitations, setVisibleCitations] = useState<InteractiveCitation[]>([]);
   
   // Table of Contents State
   const [toc, setToc] = useState<{id: string, text: string}[]>([]);
@@ -224,9 +235,11 @@ const ArticleView: React.FC<ArticleViewProps> = ({
     stopAudio();
     setActiveTerm(null);
     setShowGlossary(false);
+    setShowCitations(false);
     setShowAiPanel(false);
     setAiChat([]);
     setIsCleanMode(false);
+    setVisibleCitations([]);
 
   }, [data.id]);
 
@@ -299,6 +312,8 @@ const ArticleView: React.FC<ArticleViewProps> = ({
       contentToRender = contentToRender.replace(/<mark[^>]*>(.*?)<\/mark>/gi, '$1');
       // Remove explain-term spans but keep content
       contentToRender = contentToRender.replace(/<span class="explain-term"[^>]*>(.*?)<\/span>/gi, '$1');
+      // Remove smart-citation spans but keep content
+      contentToRender = contentToRender.replace(/<span class="smart-citation"[^>]*>(.*?)<\/span>/gi, '$1');
   }
 
   useEffect(() => {
@@ -306,6 +321,7 @@ const ArticleView: React.FC<ArticleViewProps> = ({
     if (!container) return;
 
     if (!isCleanMode) {
+        // 1. Extract Glossary Terms
         const termElements = container.querySelectorAll('.explain-term');
         const termsData: Term[] = [];
         termElements.forEach((el) => {
@@ -316,6 +332,28 @@ const ArticleView: React.FC<ArticleViewProps> = ({
             }
         });
         setAllTerms(termsData);
+
+        // 2. Extract Visible Citations (Dynamic Loading & ID Assignment)
+        const citationElements = container.querySelectorAll('.smart-citation');
+        const foundCitations: InteractiveCitation[] = [];
+        
+        citationElements.forEach((el, index) => {
+             const text = el.textContent || '';
+             const source = el.getAttribute('data-source') || '';
+             // Assign a unique ID to the citation in the DOM to enable bidirectional scrolling
+             const uniqueId = `cite-text-${index}`;
+             el.setAttribute('id', uniqueId);
+             
+             if (text && source) {
+                 foundCitations.push({
+                     id: `cite-${index}`, // ID for sidebar key
+                     text: text,
+                     source: source,
+                     targetId: uniqueId // ID for scrolling back to text
+                 });
+             }
+        });
+        setVisibleCitations(foundCitations);
     }
 
     const images = container.querySelectorAll('img');
@@ -358,7 +396,35 @@ const ArticleView: React.FC<ArticleViewProps> = ({
         if (isCleanMode) return;
         const target = e.target as HTMLElement;
         const termEl = target.closest('.explain-term') as HTMLElement;
+        const citationEl = target.closest('.smart-citation') as HTMLElement;
         
+        if (citationEl) {
+             e.preventDefault();
+             e.stopPropagation();
+             setShowCitations(true);
+             
+             // Smart Citation Link Logic: Click text -> Open Sidebar & Scroll to Card
+             // We use the index assigned during DOM processing
+             const id = citationEl.getAttribute('id');
+             const index = id ? parseInt(id.replace('cite-text-', '')) : -1;
+                 
+             if (index !== -1) {
+                 // Wait slightly for sidebar to animate in if it wasn't open
+                 setTimeout(() => {
+                     const sidebarItem = document.getElementById(`sidebar-cite-${index}`);
+                     if (sidebarItem) {
+                         sidebarItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                         // Flash Highlight effect
+                         sidebarItem.style.backgroundColor = isDarkMode ? 'rgba(139, 92, 246, 0.2)' : 'rgba(139, 92, 246, 0.1)';
+                         setTimeout(() => {
+                             sidebarItem.style.backgroundColor = '';
+                         }, 1500);
+                     }
+                 }, 200);
+             }
+             return;
+        }
+
         if (termEl) {
             e.preventDefault();
             e.stopPropagation();
@@ -390,7 +456,7 @@ const ArticleView: React.FC<ArticleViewProps> = ({
     container.addEventListener('click', handleTermClick);
     return () => container.removeEventListener('click', handleTermClick);
 
-  }, [contentToRender, isCleanMode]);
+  }, [contentToRender, isCleanMode]); // visibleCitations is updated internally, no need to depend on it
   
   useEffect(() => {
     const handleScroll = () => {
@@ -430,6 +496,7 @@ const ArticleView: React.FC<ArticleViewProps> = ({
     if (isCleanMode) {
         downloadContent = downloadContent.replace(/<mark[^>]*>(.*?)<\/mark>/gi, '$1');
         downloadContent = downloadContent.replace(/<span class="explain-term"[^>]*>(.*?)<\/span>/gi, '$1');
+        downloadContent = downloadContent.replace(/<span class="smart-citation"[^>]*>(.*?)<\/span>/gi, '$1');
     }
 
     const element = document.createElement("a");
@@ -447,6 +514,7 @@ const ArticleView: React.FC<ArticleViewProps> = ({
              figure { margin: 30px 0; width: 100%; }
              figcaption { font-style: italic; color: #757575; font-size: 0.9em; text-align: center; margin-top: 10px; }
              ${!isCleanMode ? '.explain-term { text-decoration: underline; text-decoration-style: dotted; cursor: help; }' : ''}
+             ${!isCleanMode ? '.smart-citation { border-bottom: 2px dashed #8b5cf6; cursor: pointer; color: #6d28d9; }' : ''}
           </style>
         </head>
         <body>
@@ -529,6 +597,7 @@ const ArticleView: React.FC<ArticleViewProps> = ({
 
   const handleGlossaryDeepDive = (term: string) => {
       setShowGlossary(false);
+      setShowCitations(false);
       setShowAiPanel(true);
       handleAiAsk(`Could you explain the term "${term}" in more detail within the context of this article?`);
   };
@@ -622,12 +691,36 @@ const ArticleView: React.FC<ArticleViewProps> = ({
       }
   };
 
-  const scrollToTerm = (term: Term) => {
-      if (term.element) {
-          term.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          term.element.style.backgroundColor = isDarkMode ? '#1a8917' : '#cffafe';
+  const scrollToTerm = (term: Term | InteractiveCitation) => {
+      // Find element logic depends on type
+      let element: HTMLElement | null = null;
+      
+      if ('element' in term && term.element) {
+          element = term.element;
+      } else if ('targetId' in term && term.targetId) {
+           // For Bi-Directional Citations: Use the specific ID assigned during parsing
+           element = document.getElementById(term.targetId);
+      }
+
+      // Fallback: If no ID (old content), try text matching
+      if (!element && 'text' in term) {
+           const spans = document.querySelectorAll('.smart-citation');
+           const targetText = term.text.trim().toLowerCase();
+           for (let i = 0; i < spans.length; i++) {
+               const spanText = (spans[i].textContent || '').trim().toLowerCase();
+               if (spanText.includes(targetText) || targetText.includes(spanText)) {
+                   element = spans[i] as HTMLElement;
+                   break;
+               }
+           }
+      }
+
+      if (element) {
+          element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          const originalColor = element.style.backgroundColor;
+          element.style.backgroundColor = isDarkMode ? '#1a8917' : '#cffafe';
           setTimeout(() => {
-              if (term.element) term.element.style.backgroundColor = '';
+              if (element) element.style.backgroundColor = originalColor;
           }, 1500);
       }
   };
@@ -660,6 +753,8 @@ const ArticleView: React.FC<ArticleViewProps> = ({
   const hoverBg = isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-50';
 
   const faqList = data.topQuestions || [];
+  // Use dynamically loaded citations instead of static full list
+  const citationList = visibleCitations;
 
   const AiPanelOverlay = showAiPanel && (
         <div className="fixed inset-0 z-50 flex justify-end no-print">
@@ -792,9 +887,28 @@ const ArticleView: React.FC<ArticleViewProps> = ({
         .ai-message-content p { margin-bottom: 0.5em; }
         .ai-message-content ul { list-style-type: disc; padding-left: 1.2em; margin-bottom: 0.5em; }
         .ai-message-content li { margin-bottom: 0.2em; }
+        
+        /* Smart Citation Styling */
+        .smart-citation {
+             border-bottom: 2px dashed #8b5cf6;
+             cursor: pointer;
+             color: #6d28d9;
+             transition: all 0.2s;
+        }
+        .smart-citation:hover {
+             background-color: rgba(139, 92, 246, 0.1);
+             border-bottom-style: solid;
+        }
+        .dark .smart-citation {
+             border-bottom-color: #a78bfa;
+             color: #a78bfa;
+        }
+        .dark .smart-citation:hover {
+             background-color: rgba(167, 139, 250, 0.2);
+        }
       `}</style>
       
-      {/* TOC Sidebar - Enhanced Style (Strictly Left) */}
+      {/* TOC Sidebar */}
       {toc.length > 0 && (
           <div className={`hidden xl:block fixed left-10 top-32 w-56 no-print animate-in fade-in slide-in-from-left-4`}>
               <div className="mb-4">
@@ -829,7 +943,7 @@ const ArticleView: React.FC<ArticleViewProps> = ({
           </div>
       )}
 
-      {/* Rest of the component (zoom, share, article header/body) remains same but re-rendered to ensure props are used */}
+      {/* Rest of the component (zoom, share, article header/body) */}
       {zoomedImage && (
           <div 
             className="fixed inset-0 z-[100] bg-white/95 dark:bg-black/95 flex items-center justify-center cursor-zoom-out animate-in fade-in duration-200"
@@ -887,6 +1001,7 @@ const ArticleView: React.FC<ArticleViewProps> = ({
 
       {AiPanelOverlay}
 
+      {/* GLOSSARY SIDEBAR */}
       {showGlossary && (
         <div className="fixed inset-0 z-50 flex justify-end no-print">
             <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" onClick={() => setShowGlossary(false)}></div>
@@ -932,6 +1047,69 @@ const ArticleView: React.FC<ArticleViewProps> = ({
         </div>
       )}
 
+      {/* SMART CITATIONS SIDEBAR */}
+      {showCitations && (
+        <div className="fixed inset-0 z-50 flex justify-end no-print">
+            <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" onClick={() => setShowCitations(false)}></div>
+            <div className={`relative w-full max-w-md h-full ${bgSurface} border-l ${borderCol} shadow-2xl animate-in slide-in-from-right-10 duration-300 flex flex-col`}>
+                <div className={`p-5 border-b ${borderCol} flex justify-between items-center`}>
+                    <h2 className={`text-xl font-bold font-serif ${textMain}`}>{t('smartCitations')}</h2>
+                    <button onClick={() => setShowCitations(false)} className={`${textSecondary} hover:${textMain}`}>
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                    </button>
+                </div>
+                
+                <div className={`px-5 py-3 ${isDarkMode ? 'bg-purple-900/20 text-purple-100' : 'bg-purple-50 text-purple-800'} text-xs flex items-start gap-2 border-b ${borderCol}`}>
+                    <svg className="flex-shrink-0 mt-0.5" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+                    <p>{t('citationsDesc')}</p>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-5 space-y-6">
+                    {citationList.length === 0 ? (
+                        <p className={`text-sm ${textSecondary} text-center mt-10`}>No citations found in this article.</p>
+                    ) : (
+                        citationList.map((cite, i) => (
+                            <div 
+                                key={i} 
+                                id={`sidebar-cite-${i}`} 
+                                className={`group pb-5 border-b ${isDarkMode ? 'border-gray-800' : 'border-gray-50'} last:border-0 hover:bg-gray-50 dark:hover:bg-gray-800/50 p-3 rounded transition-colors cursor-pointer`}
+                                onClick={() => scrollToTerm(cite)} // BI-DIRECTIONAL SCROLL: Clicking card scrolls to text
+                            >
+                                {/* Quote Section */}
+                                <div className="flex gap-3">
+                                     <div className="text-3xl leading-none font-serif text-gray-300 select-none transform translate-y-2">“</div>
+                                     <p className={`font-serif italic text-[17px] leading-relaxed ${textMain} group-hover:text-medium-black dark:group-hover:text-white transition-colors`}>
+                                        {cite.text}
+                                     </p>
+                                </div>
+                                
+                                {/* Source Section */}
+                                <div className="mt-3 pl-7">
+                                    <div className="flex items-center gap-2 mb-1">
+                                         <span className={`text-[10px] font-bold uppercase tracking-wider text-medium-gray`}>SOURCE</span>
+                                    </div>
+                                    {cite.source.startsWith('http') ? (
+                                        <a 
+                                            href={cite.source} 
+                                            target="_blank" 
+                                            rel="noopener noreferrer" 
+                                            className={`text-sm font-bold ${textMain} hover:underline decoration-1 underline-offset-2 truncate block`}
+                                            onClick={(e) => e.stopPropagation()} 
+                                        >
+                                            {cite.source}
+                                        </a>
+                                    ) : (
+                                        <p className={`text-sm font-bold ${textMain}`}>{cite.source}</p>
+                                    )}
+                                </div>
+                            </div>
+                        ))
+                    )}
+                </div>
+            </div>
+        </div>
+      )}
+
       <article className={`${getContainerWidthClass()} mx-auto mt-12 mb-24 px-6 md:px-0 relative`}>
         <header className="mb-10">
           <textarea
@@ -948,7 +1126,6 @@ const ArticleView: React.FC<ArticleViewProps> = ({
             style={{ minHeight: '52px' }}
           />
 
-          {/* NEW AI BUTTONS (Britannica Style) */}
           <div className="flex gap-3 mb-8 no-print">
               <button 
                 onClick={() => setShowAiPanel(true)}
@@ -968,8 +1145,8 @@ const ArticleView: React.FC<ArticleViewProps> = ({
           
           <div className="flex items-center justify-between mb-8 no-print border-b pb-8 border-gray-100 dark:border-gray-800">
               <div className="flex items-center space-x-3">
-                  <div className="w-10 h-10 rounded-full bg-gray-200 overflow-hidden flex items-center justify-center text-xs font-bold text-gray-500">
-                      <span>RB</span>
+                  <div className={`w-10 h-10 rounded-full ${isDarkMode ? 'bg-gray-800' : 'bg-gray-100'} overflow-hidden flex items-center justify-center text-gray-500`}>
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>
                   </div>
                   <div className="flex flex-col font-sans text-[14px]">
                       <div className="flex items-center space-x-2">
@@ -1004,6 +1181,25 @@ const ArticleView: React.FC<ArticleViewProps> = ({
                         <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
                           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-medium-green opacity-75"></span>
                           <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-medium-green"></span>
+                        </span>
+                    )}
+                 </button>
+
+                 {/* SMART CITATIONS BUTTON - CLEAN OUTLINED ICON */}
+                 <button 
+                   onClick={() => setShowCitations(true)}
+                   disabled={isCleanMode}
+                   className={`relative ${citationList.length > 0 ? textMain : textSecondary} hover:${textMain} transition-colors disabled:opacity-30`}
+                   title={t('smartCitations')}
+                 >
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                       <path d="M3 21c3 0 7-1 7-8V5c0-1.25-.756-2.017-2-2H4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V20c0 1 0 1 1 1z"></path>
+                       <path d="M15 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2h-4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V20c0 1 0 1 1 1z"></path>
+                    </svg>
+                    {citationList.length > 0 && !isCleanMode && (
+                        <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-600 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-purple-600"></span>
                         </span>
                     )}
                  </button>

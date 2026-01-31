@@ -1,3 +1,5 @@
+
+
 import React, { useState, useEffect } from 'react';
 import Navbar from './components/Navbar';
 import ArticleView from './components/ArticleView';
@@ -68,7 +70,9 @@ const UI_TEXT: Record<string, any> = {
     descFormal: 'Academic & objective',
     modeLight: 'Light',
     modeAuto: 'Auto',
-    modeDark: 'Dark'
+    modeDark: 'Dark',
+    smartCitations: 'Smart Citations',
+    citationsDesc: 'Click a quote to jump to it in the text. Exact source citations.'
   },
   'Nederlands': {
     text: 'Tekst',
@@ -129,7 +133,9 @@ const UI_TEXT: Record<string, any> = {
     descFormal: 'Academisch & objectief',
     modeLight: 'Licht',
     modeAuto: 'Auto',
-    modeDark: 'Donker'
+    modeDark: 'Donker',
+    smartCitations: 'Slimme Citaten',
+    citationsDesc: 'Klik op een citaat om naar de tekst te gaan. Exacte bronvermeldingen.'
   },
   'Español': {
       text: 'Texto',
@@ -190,7 +196,9 @@ const UI_TEXT: Record<string, any> = {
       descFormal: 'Académico y objetivo',
       modeLight: 'Claro',
       modeAuto: 'Auto',
-      modeDark: 'Oscuro'
+      modeDark: 'Oscuro',
+      smartCitations: 'Citas Inteligentes',
+      citationsDesc: 'Haga clic en una cita para ir al texto. Citas de fuente exactas.'
   },
   'Français': {
       text: 'Texte',
@@ -251,7 +259,9 @@ const UI_TEXT: Record<string, any> = {
       descFormal: 'Académique',
       modeLight: 'Clair',
       modeAuto: 'Auto',
-      modeDark: 'Sombre'
+      modeDark: 'Sombre',
+      smartCitations: 'Citations Intelligentes',
+      citationsDesc: 'Cliquez sur une citation pour y accéder. Citations exactes.'
   }
 };
 
