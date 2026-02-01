@@ -1,9 +1,9 @@
+
 import { initializeApp } from 'firebase/app';
 import { getFirestore, doc, setDoc, getDoc, collection, getDocs, query, orderBy, addDoc, where } from 'firebase/firestore';
-import { ArticleData, User } from '../types';
+import { ArticleData, User, UserSettings } from '../types';
 
 // --- Configuration ---
-// Updated with specific project credentials to resolve initialization error
 const firebaseConfig = {
   apiKey: "AIzaSyAXzFXDk-VIMIl3HqcFlg878_lHbpRCYz8",
   authDomain: "platform-c2b92.firebaseapp.com",
@@ -21,20 +21,18 @@ try {
   db = getFirestore(app);
   console.log("Firebase initialized successfully");
 } catch (e) {
-  console.warn("Firebase initialization failed (check config keys). App will run without DB persistence.", e);
+  console.warn("Firebase initialization failed. App will run without DB persistence.", e);
 }
 
-// --- User Services ---
+// --- User & Settings Services ---
 
 export const ensureUserInDb = async (user: User) => {
   if (!db) return;
   try {
-    // 1. Controleer/Maak Gebruikersprofiel (Check & Create Logic)
     const userRef = doc(db, "users", user.id);
     const userSnap = await getDoc(userRef);
 
     if (!userSnap.exists()) {
-      // Maak de gebruiker aan als deze nog niet bestaat
       await setDoc(userRef, { 
         id: user.id,
         name: user.name,
@@ -43,11 +41,38 @@ export const ensureUserInDb = async (user: User) => {
         lastLogin: new Date()
       });
     } else {
-      // Update last login
       await setDoc(userRef, { lastLogin: new Date() }, { merge: true });
     }
   } catch (e) {
     console.error("Error connecting to User DB:", e);
+  }
+};
+
+export const saveUserSettings = async (userId: string, settings: UserSettings) => {
+  if (!db) return;
+  try {
+    const settingsRef = doc(db, "users", userId, "config", "preferences");
+    await setDoc(settingsRef, {
+      ...settings,
+      updatedAt: new Date()
+    });
+  } catch (e) {
+    console.error("Error saving user settings:", e);
+  }
+};
+
+export const getUserSettings = async (userId: string): Promise<UserSettings | null> => {
+  if (!db) return null;
+  try {
+    const settingsRef = doc(db, "users", userId, "config", "preferences");
+    const snap = await getDoc(settingsRef);
+    if (snap.exists()) {
+        return snap.data() as UserSettings;
+    }
+    return null;
+  } catch (e) {
+    console.error("Error loading user settings:", e);
+    return null;
   }
 };
 
@@ -56,14 +81,6 @@ export const ensureUserInDb = async (user: User) => {
 export const saveArticleToLibrary = async (userId: string, article: ArticleData) => {
   if (!db) return;
   try {
-     // Ensure user exists first (redundancy check for data integrity)
-    const userRef = doc(db, "users", userId);
-    const userSnap = await getDoc(userRef);
-    if (!userSnap.exists()) {
-        await setDoc(userRef, { userId: userId, createdAt: new Date() });
-    }
-
-    // 2. Sla artikel op in de Library collectie onder de specifieke gebruiker
     const libraryRef = doc(collection(db, "users", userId, "library"), article.id);
     await setDoc(libraryRef, {
       ...article,
@@ -81,9 +98,7 @@ export const getLibraryFromDb = async (userId: string): Promise<ArticleData[]> =
     const q = query(collection(db, "users", userId, "library"), orderBy("savedAt", "desc"));
     const querySnapshot = await getDocs(q);
     return querySnapshot.docs.map(doc => {
-        const data = doc.data();
-        // Remove DB-specific timestamp to match ArticleData type exactly if needed
-        const { savedAt, ...articleData } = data; 
+        const { savedAt, ...articleData } = doc.data(); 
         return articleData as ArticleData;
     });
   } catch (e) {
@@ -105,7 +120,6 @@ export interface DbComment {
 export const addCommentToDb = async (articleId: string, comment: Omit<DbComment, 'id' | 'timestamp'>) => {
   if (!db) return;
   try {
-    // We store comments in a top-level collection 'articles/{id}/comments' to separate concerns
     const commentsRef = collection(db, "articles", articleId, "comments");
     await addDoc(commentsRef, {
       ...comment,

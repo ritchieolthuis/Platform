@@ -1,13 +1,12 @@
 
-
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Navbar from './components/Navbar';
 import ArticleView from './components/ArticleView';
 import SettingsPanel from './components/SettingsPanel';
 import LibraryView from './components/LibraryView';
 import { ArticleData, SourceType, HighlightOptions, User, UserSettings, WritingStyle, ColorMode, FontType, ReadingLevel } from './types';
 import { processSource, translateHtml } from './services/parserService';
-import { ensureUserInDb, saveArticleToLibrary, getLibraryFromDb } from './services/firebase';
+import { ensureUserInDb, saveArticleToLibrary, getLibraryFromDb, saveUserSettings, getUserSettings } from './services/firebase';
 
 // --- UI Translations ---
 const UI_TEXT: Record<string, any> = {
@@ -72,7 +71,8 @@ const UI_TEXT: Record<string, any> = {
     modeAuto: 'Auto',
     modeDark: 'Dark',
     smartCitations: 'Smart Citations',
-    citationsDesc: 'Click a quote to jump to it in the text. Exact source citations.'
+    citationsDesc: 'Click a quote to jump to it in the text. Exact source citations.',
+    tryNow: 'Try these today'
   },
   'Nederlands': {
     text: 'Tekst',
@@ -135,153 +135,25 @@ const UI_TEXT: Record<string, any> = {
     modeAuto: 'Auto',
     modeDark: 'Donker',
     smartCitations: 'Slimme Citaten',
-    citationsDesc: 'Klik op een citaat om naar de tekst te gaan. Exacte bronvermeldingen.'
-  },
-  'Español': {
-      text: 'Texto',
-      small: 'Pequeño',
-      standard: 'Estándar',
-      large: 'Grande',
-      pageWidth: 'Ancho de página',
-      fullWidth: 'Ancho completo',
-      upload: 'Subir archivo',
-      library: 'Mi biblioteca',
-      searchPlaceholder: 'Pegar URL o preguntar a IA...',
-      ready: '¿Listo para leer?',
-      readyDesc: 'Pega una URL o sube un archivo PDF, DOCX o HTML.',
-      myLibrary: 'Mi biblioteca',
-      emptyLibrary: 'Tu biblioteca está vacía',
-      saveLater: 'Guarda artículos para leerlos más tarde.',
-      signIn: 'Iniciar sesión',
-      customize: 'Personalizar',
-      writingStyle: 'Estilo de escritura',
-      appearance: 'Apariencia',
-      colorMode: 'Modo de color',
-      font: 'Fuente',
-      focusHighlights: 'Enfoque y destacados',
-      keywords: 'Palabras clave',
-      keywordsPlaceholder: 'Palabras clave (ej. IA, Tech)',
-      customFocus: 'Instrucción de enfoque personalizado',
-      customFocusPlaceholder: 'Ej., Enfocarse en estadísticas...',
-      account: 'Cuenta',
-      language: 'Idioma',
-      signOut: 'Cerrar sesión',
-      saveToLibrary: 'Guardar en biblioteca',
-      share: 'Compartir',
-      responses: 'Respuestas',
-      respond: 'Responder',
-      download: 'Descargar copia sin conexión',
-      generateMore: 'Generar más',
-      sourceCitation: 'Cita de fuente',
-      topQuestions: 'Preguntas frecuentes',
-      quickSummary: 'Resumen rápido',
-      askAnything: 'Preguntar cualquier cosa',
-      tableOfContents: 'Contenido',
-      hide: 'ocultar',
-      show: 'mostrar',
-      highlightLength: 'Longitud de destacado',
-      readingLevel: 'Nivel de lectura',
-      levelBeginner: 'Principiante',
-      levelIntermediate: 'Intermedio',
-      levelExpert: 'Experto',
-      styleNormal: 'Normal',
-      styleLearning: 'Aprendizaje',
-      styleConcise: 'Conciso',
-      styleExplanatory: 'Explicativo',
-      styleFormal: 'Formal',
-      descNormal: 'Estilo estándar',
-      descLearning: 'Explicaciones simples',
-      descConcise: 'Corto y al punto',
-      descExplanatory: 'Detalles profundos',
-      descFormal: 'Académico y objetivo',
-      modeLight: 'Claro',
-      modeAuto: 'Auto',
-      modeDark: 'Oscuro',
-      smartCitations: 'Citas Inteligentes',
-      citationsDesc: 'Haga clic en una cita para ir al texto. Citas de fuente exactas.'
-  },
-  'Français': {
-      text: 'Texte',
-      small: 'Petit',
-      standard: 'Standard',
-      large: 'Grand',
-      pageWidth: 'Largeur de page',
-      fullWidth: 'Pleine largeur',
-      upload: 'Télécharger un fichier',
-      library: 'Ma bibliothèque',
-      searchPlaceholder: 'Collez l\'URL ou demandez à l\'IA...',
-      ready: 'Prêt à lire ?',
-      readyDesc: 'Collez une URL ou téléchargez un fichier PDF, DOCX ou HTML.',
-      myLibrary: 'Ma bibliothèque',
-      emptyLibrary: 'Votre bibliothèque est vide',
-      saveLater: 'Enregistrez des articles pour les lire plus tard.',
-      signIn: 'Se connecter',
-      customize: 'Personnaliser',
-      writingStyle: 'Style d\'écriture',
-      appearance: 'Apparence',
-      colorMode: 'Mode couleur',
-      font: 'Police',
-      focusHighlights: 'Focus & Surlignages',
-      keywords: 'Mots-clés',
-      keywordsPlaceholder: 'Mots-clés (ex: IA, Tech)',
-      customFocus: 'Instruction de focus personnalisé',
-      customFocusPlaceholder: 'Ex: Focus sur les stats...',
-      account: 'Compte',
-      language: 'Langue',
-      signOut: 'Se déconnecter',
-      saveToLibrary: 'Enregistrer dans la bibliothèque',
-      share: 'Partager',
-      responses: 'Réponses',
-      respond: 'Répondre',
-      download: 'Télécharger la copie hors ligne',
-      generateMore: 'Générer plus',
-      sourceCitation: 'Citation de la source',
-      topQuestions: 'Questions fréquentes',
-      quickSummary: 'Résumé rapide',
-      askAnything: 'Demandez n\'importe quoi',
-      tableOfContents: 'Sommaire',
-      hide: 'masquer',
-      show: 'afficher',
-      highlightLength: 'Longueur de surlignage',
-      readingLevel: 'Niveau de lecture',
-      levelBeginner: 'Débutant',
-      levelIntermediate: 'Intermédiaire',
-      levelExpert: 'Expert',
-      styleNormal: 'Normal',
-      styleLearning: 'Apprentissage',
-      styleConcise: 'Concis',
-      styleExplanatory: 'Explicatif',
-      styleFormal: 'Formel',
-      descNormal: 'Style standard',
-      descLearning: 'Explications simples',
-      descConcise: 'Court et précis',
-      descExplanatory: 'Détails approfondis',
-      descFormal: 'Académique',
-      modeLight: 'Clair',
-      modeAuto: 'Auto',
-      modeDark: 'Sombre',
-      smartCitations: 'Citations Intelligentes',
-      citationsDesc: 'Cliquez sur une citation pour y accéder. Citations exactes.'
+    citationsDesc: 'Klik op een citaat om naar de tekst te gaan. Exacte bronvermeldingen.',
+    tryNow: 'Probeer dit vandaag'
   }
 };
 
 const getUiText = (lang: string, key: string) => {
-   // Fallback to English if the specific language dictionary doesn't exist, 
-   // or if the specific key doesn't exist in that language.
    const dict = UI_TEXT[lang] || UI_TEXT['English'];
    return dict[key] || UI_TEXT['English'][key] || key;
 };
 
 export default function App() {
-  // State
   const [data, setData] = useState<ArticleData>({ id: '', title: "", content: "", excerpt: "" });
   const [loading, setLoading] = useState(false);
   const [currentView, setCurrentView] = useState<'home' | 'library'>('home');
   const [showSettings, setShowSettings] = useState(false);
   const [globalAiQuery, setGlobalAiQuery] = useState<string>(''); 
-  const [triggerAiPanel, setTriggerAiPanel] = useState<number>(0); // Counter to trigger panel open
+  const [triggerAiPanel, setTriggerAiPanel] = useState<number>(0);
+  const [dailyHighlights, setDailyHighlights] = useState<any[]>([]);
   
-  // Settings State 
   const [settings, setSettings] = useState<UserSettings>({
     readingLevel: 'intermediate',
     writingStyle: 'normal',
@@ -295,10 +167,9 @@ export default function App() {
       color: '#cffafe'
     },
     customPrompt: '',
-    language: 'English' // Default language
+    language: 'English'
   });
 
-  // User & Library
   const [user, setUser] = useState<User | null>({
     id: 'ritchieolthuis',
     name: 'Ritchie Olthuis',
@@ -306,35 +177,41 @@ export default function App() {
   });
   const [library, setLibrary] = useState<ArticleData[]>([]);
 
-  // Load library & settings
+  // Initial Sync Logic
   useEffect(() => {
-    const savedLibrary = localStorage.getItem('medium-clone-library');
-    if (savedLibrary) {
-      setLibrary(JSON.parse(savedLibrary));
-    }
-    const savedSettings = localStorage.getItem('medium-clone-settings');
-    if (savedSettings) {
-      setSettings(prev => ({...prev, ...JSON.parse(savedSettings)}));
-    }
-
     if (user) {
         ensureUserInDb(user).then(() => {
+            // Load Settings from DB
+            return getUserSettings(user.id);
+        }).then(dbSettings => {
+            if (dbSettings) {
+                setSettings(prev => ({...prev, ...dbSettings}));
+            }
+            // Load Library from DB
             return getLibraryFromDb(user.id);
         }).then(dbLibrary => {
             if (dbLibrary.length > 0) {
                 setLibrary(dbLibrary);
-                localStorage.setItem('medium-clone-library', JSON.stringify(dbLibrary));
+                localStorage.setItem('lumea-reader-library', JSON.stringify(dbLibrary));
             }
-        }).catch(e => console.error("Initial DB Sync failed", e));
+        }).catch(e => console.error("Initial Sync failed", e));
     }
   }, []);
 
-  // Persist settings
+  // PERMANENT MEMORY: Sync settings to DB on change
+  const initialSettingsLoadRef = useRef(true);
   useEffect(() => {
-    localStorage.setItem('medium-clone-settings', JSON.stringify(settings));
-  }, [settings]);
+    if (user) {
+        // Skip first call if it was the load from DB
+        if (initialSettingsLoadRef.current) {
+            initialSettingsLoadRef.current = false;
+            return;
+        }
+        saveUserSettings(user.id, settings);
+    }
+    localStorage.setItem('lumea-reader-settings', JSON.stringify(settings));
+  }, [settings, user]);
 
-  // Dark Mode
   const [isDarkMode, setIsDarkMode] = useState(false);
   useEffect(() => {
     if (settings.colorMode === 'auto') {
@@ -348,47 +225,43 @@ export default function App() {
     }
   }, [settings.colorMode]);
 
+  useEffect(() => {
+    if (currentView === 'home' && !data.content && !loading) {
+      const highlights = [
+        { title: "UN Experts Warn of Global Job Displacement Risks in 2026", source: "UN News", url: "https://news.un.org/en/story/2026/01/1160452" },
+        { title: "The Tiny Tech Revolutionizing What We Know About Biology", source: "CNN10", url: "https://www.youtube.com/watch?v=LXb3EKWsInQ" },
+        { title: "Chinese Astronomers Trace Origin of Fast Radio Bursts", source: "Science Bulletin", url: "https://doi.org/10.1016/j.scib.2026.01.031" },
+        { title: "TikTok Dominates 2026 Grammy Best New Artist Nominations", source: "LAist / NPR", url: "https://laist.com/news/tiktok-at-the-grammys-2026" }
+      ];
+      setDailyHighlights(highlights);
+    }
+  }, [currentView, data.content, settings.language]);
+
   const handleProcess = async (type: SourceType, source: string, sourceName?: string) => {
     setLoading(true);
     setCurrentView('home');
     try {
       const result = await processSource(
-          type, 
-          source, 
-          settings.highlightOptions, 
-          settings.writingStyle,
-          settings.customPrompt,
-          sourceName,
-          settings.readingLevel,
-          settings.language // Pass current language for translation
+          type, source, settings.highlightOptions, settings.writingStyle,
+          settings.customPrompt, sourceName, settings.readingLevel, settings.language
       );
       setData(result);
     } catch (error) {
-      console.error("Failed to process", error);
-      setData({ 
-        id: 'error',
-        title: "Error", 
-        content: "<p>Something went wrong processing your document.</p>",
-        excerpt: ""
-      });
+      setData({ id: 'error', title: "Error", content: "<p>Processing failed.</p>", excerpt: "" });
     } finally {
       setLoading(false);
     }
   };
 
   const handleTranslate = async (lang: string) => {
-    // Update global language setting
     setSettings(prev => ({ ...prev, language: lang }));
-
     if (!data.content || data.id === 'error') return;
-    
     setLoading(true);
     try {
       const translatedContent = await translateHtml(data.content, lang);
       setData(prev => ({ ...prev, content: translatedContent }));
     } catch (error) {
-      console.error("Translation failed", error);
-      alert("Could not translate article.");
+      alert("Translation failed.");
     } finally {
       setLoading(false);
     }
@@ -399,74 +272,36 @@ export default function App() {
   };
 
   const handleLogin = async () => {
-    const mockUser = {
-      id: 'ritchieolthuis',
-      name: 'Ritchie Olthuis',
-      avatar: 'https://ui-avatars.com/api/?name=Ritchie+Olthuis&background=1a8917&color=fff'
-    };
+    const mockUser = { id: 'ritchieolthuis', name: 'Ritchie Olthuis', avatar: 'https://ui-avatars.com/api/?name=Ritchie+Olthuis&background=1a8917&color=fff' };
     setUser(mockUser);
-    
     try {
         await ensureUserInDb(mockUser);
+        const dbSettings = await getUserSettings(mockUser.id);
+        if (dbSettings) setSettings(dbSettings);
         const dbLibrary = await getLibraryFromDb(mockUser.id);
-        if (dbLibrary.length > 0) {
-            setLibrary(dbLibrary);
-            localStorage.setItem('medium-clone-library', JSON.stringify(dbLibrary));
-        }
-    } catch (e) {
-        console.error("DB Login Sync failed", e);
-    }
+        if (dbLibrary.length > 0) setLibrary(dbLibrary);
+    } catch (e) {}
   };
 
-  const handleLogout = () => {
-      setUser(null);
-      setLibrary([]);
-  };
+  const handleLogout = () => { setUser(null); setLibrary([]); };
 
   const handleSaveToLibrary = async (article: ArticleData) => {
-    if (!user) {
-      alert("Please sign in to save articles.");
-      return;
-    }
-
+    if (!user) return;
     const existingIndex = library.findIndex(item => item.id === article.id);
-    let newLibrary;
-    
-    if (existingIndex >= 0) {
-        newLibrary = [...library];
-        newLibrary[existingIndex] = article; 
-    } else {
-        newLibrary = [article, ...library];
-    }
-
+    let newLibrary = existingIndex >= 0 ? [...library] : [article, ...library];
+    if (existingIndex >= 0) newLibrary[existingIndex] = article;
     setLibrary(newLibrary);
-    localStorage.setItem('medium-clone-library', JSON.stringify(newLibrary));
-      
-    try {
-      await saveArticleToLibrary(user.id, article);
-    } catch (e) {
-      console.error("Failed to save to database", e);
-    }
+    localStorage.setItem('lumea-reader-library', JSON.stringify(newLibrary));
+    try { await saveArticleToLibrary(user.id, article); } catch (e) {}
   };
 
-  const handleSelectFromLibrary = (article: ArticleData) => {
-    setData(article);
-    setCurrentView('home');
-  };
-
-  const handleAiQuery = (query: string) => {
-      setGlobalAiQuery(query);
-      setCurrentView('home');
-  };
-
-  const handleOpenAiPanel = () => {
-      if (currentView !== 'home') setCurrentView('home');
-      setTriggerAiPanel(prev => prev + 1);
-  }
+  const handleSelectFromLibrary = (article: ArticleData) => { setData(article); setCurrentView('home'); };
+  const handleAiQuery = (query: string) => { setGlobalAiQuery(query); setCurrentView('home'); };
+  const handleOpenAiPanel = () => { if (currentView !== 'home') setCurrentView('home'); setTriggerAiPanel(prev => prev + 1); }
+  const handleNavigateHome = () => { setCurrentView('home'); setData({ id: '', title: "", content: "", excerpt: "" }); };
 
   const isCurrentArticleSaved = library.some(item => item.id === data.id);
 
-  // Apply Dark Mode Class
   useEffect(() => {
     if (isDarkMode) {
       document.body.classList.add('dark');
@@ -481,62 +316,13 @@ export default function App() {
 
   return (
     <div className={`min-h-screen antialiased relative transition-colors duration-300 ${isDarkMode ? 'bg-[#121212] text-medium-darkText' : 'bg-white text-medium-black'}`}>
-      <Navbar 
-        onProcess={handleProcess} 
-        onAiQuery={handleAiQuery}
-        onOpenAiPanel={handleOpenAiPanel}
-        loading={loading} 
-        user={user}
-        onLogin={handleLogin}
-        onLogout={handleLogout}
-        onToggleSettings={() => setShowSettings(!showSettings)}
-        onNavigateHome={() => setCurrentView('home')}
-        onNavigateLibrary={() => setCurrentView('library')}
-        onTranslate={handleTranslate}
-        currentView={currentView}
-        isDarkMode={isDarkMode}
-        t={t}
-        currentLanguage={settings.language}
-      />
-
-      <SettingsPanel 
-        isOpen={showSettings} 
-        onClose={() => setShowSettings(false)}
-        settings={settings}
-        onChange={setSettings}
-        isDarkMode={isDarkMode}
-        t={t}
-      />
-      
+      <Navbar onProcess={handleProcess} onAiQuery={handleAiQuery} onOpenAiPanel={handleOpenAiPanel} loading={loading} user={user} onLogin={handleLogin} onLogout={handleLogout} onToggleSettings={() => setShowSettings(!showSettings)} onNavigateHome={handleNavigateHome} onNavigateLibrary={() => setCurrentView('library')} onTranslate={handleTranslate} currentView={currentView} isDarkMode={isDarkMode} t={t} currentLanguage={settings.language} />
+      <SettingsPanel isOpen={showSettings} onClose={() => setShowSettings(false)} settings={settings} onChange={setSettings} isDarkMode={isDarkMode} t={t} />
       <main className="w-full">
         {currentView === 'home' ? (
-           <ArticleView 
-             data={data} 
-             loading={loading} 
-             onSave={user ? handleSaveToLibrary : undefined}
-             isSaved={isCurrentArticleSaved}
-             isDarkMode={isDarkMode}
-             font={settings.font}
-             fontSize={settings.fontSize}
-             pageWidth={settings.pageWidth}
-             onTitleChange={handleTitleUpdate}
-             globalAiQuery={globalAiQuery}
-             onGlobalAiQueryHandled={() => setGlobalAiQuery('')}
-             // Pass the trigger to prompt opening the panel
-             highlightOptions={settings.highlightOptions}
-             triggerAiPanel={triggerAiPanel}
-             t={t}
-             onNavigateLibrary={() => setCurrentView('library')}
-             onNavigateHome={() => setCurrentView('home')}
-           />
+           <ArticleView data={data} loading={loading} onSave={user ? handleSaveToLibrary : undefined} isSaved={isCurrentArticleSaved} isDarkMode={isDarkMode} font={settings.font} fontSize={settings.fontSize} pageWidth={settings.pageWidth} onTitleChange={handleTitleUpdate} globalAiQuery={globalAiQuery} onGlobalAiQueryHandled={() => setGlobalAiQuery('')} highlightOptions={settings.highlightOptions} triggerAiPanel={triggerAiPanel} t={t} onNavigateLibrary={() => setCurrentView('library')} onNavigateHome={handleNavigateHome} onLoadDemo={(url) => handleProcess('url', url, 'Demo Article')} dailyHighlights={dailyHighlights} language={settings.language} />
         ) : (
-           <LibraryView 
-             articles={library}
-             onSelect={handleSelectFromLibrary}
-             isDarkMode={isDarkMode}
-             font={settings.font}
-             t={t}
-           />
+           <LibraryView articles={library} onSelect={handleSelectFromLibrary} isDarkMode={isDarkMode} font={settings.font} t={t} />
         )}
       </main>
     </div>

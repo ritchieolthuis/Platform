@@ -1,5 +1,4 @@
 
-
 export interface HighlightOptions {
   minLength: number;
   keywords: string[];
@@ -23,6 +22,21 @@ export interface Citation {
   source: string; // Author, Year, or Document Page
 }
 
+export interface QuizQuestion {
+  question: string;
+  options: string[];
+  correctAnswerIndex: number;
+  explanation: string; // Context/Fact shown after answering
+  hint?: string; // Optional hint for the user
+}
+
+export interface Quiz {
+  id: string;
+  title: string;
+  thumbnailUrl?: string;
+  questions: QuizQuestion[];
+}
+
 export interface ArticleData {
   id: string;
   title: string;
@@ -38,6 +52,7 @@ export interface ArticleData {
   citation?: string; // Exact 1:1 source citation
   citations?: Citation[]; // List of specific citations found in text
   topQuestions?: FaqItem[]; // Generated FAQs
+  ownerId?: string; // ID of the user who generated/saved this
 }
 
 export type SourceType = 'url' | 'pdf' | 'html' | 'docx';

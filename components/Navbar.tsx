@@ -105,9 +105,13 @@ const Navbar: React.FC<NavbarProps> = ({
         
         {/* Left: Logo */}
         <div className="flex items-center min-w-[200px]">
-          <div className="cursor-pointer flex items-center gap-3" onClick={onNavigateHome}>
-             <div className={`font-serif font-bold text-2xl tracking-tight hidden md:block ${textMain}`}>
-               MediumClone
+          <div 
+            className="cursor-pointer flex items-center gap-3 group" 
+            onClick={onNavigateHome}
+            title="Back to Home"
+          >
+             <div className={`font-serif font-bold text-2xl tracking-tight hidden md:block ${textMain} group-hover:text-medium-green transition-colors`}>
+               LumeaReader
              </div>
           </div>
         </div>

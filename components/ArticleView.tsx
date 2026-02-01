@@ -1,9 +1,9 @@
 
-
 import React, { useState, useEffect, useRef } from 'react';
-import { ArticleData, FontType, FontSize, PageWidth, HighlightOptions, Citation } from '../types';
+import { ArticleData, FontType, FontSize, PageWidth, HighlightOptions, Citation, User } from '../types';
 import { addCommentToDb, getCommentsFromDb } from '../services/firebase';
 import { fetchAudioForChunk, splitTextIntoChunks, askAiAboutArticle } from '../services/parserService';
+import QuizWidget from './QuizWidget';
 
 interface ArticleViewProps {
   data: ArticleData;
@@ -22,6 +22,10 @@ interface ArticleViewProps {
   t: (key: string) => string;
   onNavigateLibrary?: () => void;
   onNavigateHome?: () => void;
+  onLoadDemo?: (url: string) => void;
+  dailyHighlights?: Array<{ title: string; source: string; url: string }>;
+  language?: string;
+  currentUser?: User | null;
 }
 
 interface Comment {
@@ -50,11 +54,6 @@ interface ChatMessage {
     content: string;
 }
 
-// Extended Citation type for internal use to include target DOM ID
-interface InteractiveCitation extends Citation {
-    targetId?: string;
-}
-
 const ArticleView: React.FC<ArticleViewProps> = ({ 
     data, 
     loading, 
@@ -71,7 +70,11 @@ const ArticleView: React.FC<ArticleViewProps> = ({
     highlightOptions,
     t,
     onNavigateLibrary,
-    onNavigateHome
+    onNavigateHome,
+    onLoadDemo,
+    dailyHighlights,
+    language = 'English',
+    currentUser
 }) => {
   const [chunks, setChunks] = useState<string[]>([]);
   const [visibleChunks, setVisibleChunks] = useState(1);
@@ -81,6 +84,13 @@ const ArticleView: React.FC<ArticleViewProps> = ({
   const articleRef = useRef<HTMLDivElement>(null);
   const titleTextareaRef = useRef<HTMLTextAreaElement>(null);
   
+  // Ownership Check: Only owner can edit title
+  // Default to owner if generating a new article
+  const isOwner = !data.ownerId || (currentUser && data.ownerId === currentUser.id);
+
+  // Reading Progress State
+  const [scrollProgress, setScrollProgress] = useState(0);
+
   // Interactive Terms State
   const [activeTerm, setActiveTerm] = useState<ActiveTermState | null>(null);
   const [allTerms, setAllTerms] = useState<Term[]>([]);
@@ -88,7 +98,6 @@ const ArticleView: React.FC<ArticleViewProps> = ({
   
   // Smart Citations State
   const [showCitations, setShowCitations] = useState(false);
-  const [visibleCitations, setVisibleCitations] = useState<InteractiveCitation[]>([]);
   
   // Table of Contents State
   const [toc, setToc] = useState<{id: string, text: string}[]>([]);
@@ -131,6 +140,19 @@ const ArticleView: React.FC<ArticleViewProps> = ({
         if (onGlobalAiQueryHandled) onGlobalAiQueryHandled();
     }
   }, [globalAiQuery]);
+
+  // Handle Scroll Progress
+  useEffect(() => {
+    const handleScroll = () => {
+        const totalScroll = document.documentElement.scrollTop;
+        const windowHeight = document.documentElement.scrollHeight - document.documentElement.clientHeight;
+        if (windowHeight === 0) return;
+        const scroll = totalScroll / windowHeight;
+        setScrollProgress(Number(scroll));
+    }
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
 
   // Handle Trigger from Navbar star icon using Ref to avoid auto-open on remount
   const lastTriggerRef = useRef(triggerAiPanel);
@@ -239,7 +261,7 @@ const ArticleView: React.FC<ArticleViewProps> = ({
     setShowAiPanel(false);
     setAiChat([]);
     setIsCleanMode(false);
-    setVisibleCitations([]);
+    setScrollProgress(0);
 
   }, [data.id]);
 
@@ -321,7 +343,6 @@ const ArticleView: React.FC<ArticleViewProps> = ({
     if (!container) return;
 
     if (!isCleanMode) {
-        // 1. Extract Glossary Terms
         const termElements = container.querySelectorAll('.explain-term');
         const termsData: Term[] = [];
         termElements.forEach((el) => {
@@ -332,28 +353,6 @@ const ArticleView: React.FC<ArticleViewProps> = ({
             }
         });
         setAllTerms(termsData);
-
-        // 2. Extract Visible Citations (Dynamic Loading & ID Assignment)
-        const citationElements = container.querySelectorAll('.smart-citation');
-        const foundCitations: InteractiveCitation[] = [];
-        
-        citationElements.forEach((el, index) => {
-             const text = el.textContent || '';
-             const source = el.getAttribute('data-source') || '';
-             // Assign a unique ID to the citation in the DOM to enable bidirectional scrolling
-             const uniqueId = `cite-text-${index}`;
-             el.setAttribute('id', uniqueId);
-             
-             if (text && source) {
-                 foundCitations.push({
-                     id: `cite-${index}`, // ID for sidebar key
-                     text: text,
-                     source: source,
-                     targetId: uniqueId // ID for scrolling back to text
-                 });
-             }
-        });
-        setVisibleCitations(foundCitations);
     }
 
     const images = container.querySelectorAll('img');
@@ -378,18 +377,33 @@ const ArticleView: React.FC<ArticleViewProps> = ({
     const iframes = container.querySelectorAll('iframe');
     iframes.forEach(iframe => {
         let src = iframe.getAttribute('src') || '';
-        if (src.includes('youtube.com/watch?v=')) {
-            const videoId = src.split('v=')[1]?.split('&')[0];
-            if (videoId) src = `https://www.youtube.com/embed/${videoId}`;
-        } else if (src.includes('youtu.be/')) {
-            const videoId = src.split('youtu.be/')[1]?.split('?')[0];
-            if (videoId) src = `https://www.youtube.com/embed/${videoId}`;
+        
+        // 1. YouTube Fix (Standard & Short)
+        if (src.includes('youtube.com/watch?v=') || src.includes('youtu.be/')) {
+            const videoId = src.includes('v=') ? src.split('v=')[1]?.split('&')[0] : src.split('youtu.be/')[1]?.split('?')[0];
+            if (videoId) {
+                // FORCE NO-COOKIE DOMAIN for better embedding success
+                src = `https://www.youtube-nocookie.com/embed/${videoId}?rel=0&modestbranding=1`;
+            }
+        } 
+        // 2. Already Embed but standard domain -> Swap to nocookie
+        else if (src.includes('youtube.com/embed/')) {
+            src = src.replace('youtube.com', 'youtube-nocookie.com');
         }
-        if (src.includes('youtube.com/embed/') || src.includes('player.vimeo.com')) {
+        
+        // 3. Vimeo Support
+        if (src.includes('vimeo.com') && !src.includes('player.vimeo.com')) {
+            const vimeoId = src.match(/vimeo\.com\/(\d+)/)?.[1];
+            if (vimeoId) src = `https://player.vimeo.com/video/${vimeoId}`;
+        }
+
+        // Apply corrected SRC and attributes
+        if (src !== iframe.getAttribute('src')) {
             iframe.src = src;
-            iframe.setAttribute('allow', 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture');
-            iframe.setAttribute('allowfullscreen', 'true');
         }
+        
+        iframe.setAttribute('allow', 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture');
+        iframe.setAttribute('allowfullscreen', 'true');
     });
 
     const handleTermClick = (e: Event) => {
@@ -404,23 +418,25 @@ const ArticleView: React.FC<ArticleViewProps> = ({
              setShowCitations(true);
              
              // Smart Citation Link Logic: Click text -> Open Sidebar & Scroll to Card
-             // We use the index assigned during DOM processing
-             const id = citationEl.getAttribute('id');
-             const index = id ? parseInt(id.replace('cite-text-', '')) : -1;
+             const text = citationEl.textContent?.trim();
+             if (text && data.citations) {
+                 // Try to match by exact text. 
+                 const index = data.citations.findIndex(c => c.text.trim() === text);
                  
-             if (index !== -1) {
-                 // Wait slightly for sidebar to animate in if it wasn't open
-                 setTimeout(() => {
-                     const sidebarItem = document.getElementById(`sidebar-cite-${index}`);
-                     if (sidebarItem) {
-                         sidebarItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                         // Flash Highlight effect
-                         sidebarItem.style.backgroundColor = isDarkMode ? 'rgba(139, 92, 246, 0.2)' : 'rgba(139, 92, 246, 0.1)';
-                         setTimeout(() => {
-                             sidebarItem.style.backgroundColor = '';
-                         }, 1500);
-                     }
-                 }, 200);
+                 if (index !== -1) {
+                     // Wait slightly for sidebar to animate in if it wasn't open
+                     setTimeout(() => {
+                         const sidebarItem = document.getElementById(`sidebar-cite-${index}`);
+                         if (sidebarItem) {
+                             sidebarItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                             // Flash Highlight effect
+                             sidebarItem.style.backgroundColor = isDarkMode ? 'rgba(139, 92, 246, 0.2)' : 'rgba(139, 92, 246, 0.1)';
+                             setTimeout(() => {
+                                 sidebarItem.style.backgroundColor = '';
+                             }, 1500);
+                         }
+                     }, 200);
+                 }
              }
              return;
         }
@@ -456,7 +472,7 @@ const ArticleView: React.FC<ArticleViewProps> = ({
     container.addEventListener('click', handleTermClick);
     return () => container.removeEventListener('click', handleTermClick);
 
-  }, [contentToRender, isCleanMode]); // visibleCitations is updated internally, no need to depend on it
+  }, [contentToRender, isCleanMode, data.citations]);
   
   useEffect(() => {
     const handleScroll = () => {
@@ -521,7 +537,7 @@ const ArticleView: React.FC<ArticleViewProps> = ({
           <h1>${data.title}</h1>
           ${downloadContent}
           ${data.citation ? `<div style="margin-top: 40px; padding: 20px; border-left: 4px solid #eee; background: #f9f9f9;"><b>Source Citation:</b><br/>${data.citation}</div>` : ''}
-          <div style="margin-top: 50px; font-size: 12px; color: #888;">Generated by MediumClone</div>
+          <div style="margin-top: 50px; font-size: 12px; color: #888;">Generated by LumeaReader</div>
         </body>
       </html>
     `], {type: 'text/html'});
@@ -691,21 +707,29 @@ const ArticleView: React.FC<ArticleViewProps> = ({
       }
   };
 
-  const scrollToTerm = (term: Term | InteractiveCitation) => {
+  const scrollToTerm = (term: Term | Citation) => {
       // Find element logic depends on type
       let element: HTMLElement | null = null;
       
       if ('element' in term && term.element) {
           element = term.element;
-      } else if ('targetId' in term && term.targetId) {
-           // For Bi-Directional Citations: Use the specific ID assigned during parsing
-           element = document.getElementById(term.targetId);
-      }
-
-      // Fallback: If no ID (old content), try text matching
-      if (!element && 'text' in term) {
+          // Check if element is still connected to DOM (not stale from re-render)
+          if (!element.isConnected) {
+              // Try to find it again by text
+              const termElements = document.querySelectorAll('.explain-term');
+              for (let i = 0; i < termElements.length; i++) {
+                  if (termElements[i].textContent === term.text) {
+                      element = termElements[i] as HTMLElement;
+                      break;
+                  }
+              }
+          }
+      } else {
+           // For Citations, we need to find the span in DOM
+           // Enhanced finding logic: Check for partial matches or trimmed content
            const spans = document.querySelectorAll('.smart-citation');
            const targetText = term.text.trim().toLowerCase();
+           
            for (let i = 0; i < spans.length; i++) {
                const spanText = (spans[i].textContent || '').trim().toLowerCase();
                if (spanText.includes(targetText) || targetText.includes(spanText)) {
@@ -716,13 +740,109 @@ const ArticleView: React.FC<ArticleViewProps> = ({
       }
 
       if (element) {
+          // Close Sidebar first for better view on mobile
+          if (window.innerWidth < 768) {
+             setShowGlossary(false);
+             setShowCitations(false);
+          }
+
           element.scrollIntoView({ behavior: 'smooth', block: 'center' });
           const originalColor = element.style.backgroundColor;
-          element.style.backgroundColor = isDarkMode ? '#1a8917' : '#cffafe';
+          const flashColor = isDarkMode ? '#1a8917' : '#cffafe';
+          
+          element.style.backgroundColor = flashColor;
+          element.style.transition = 'background-color 0.5s ease';
+          
           setTimeout(() => {
-              if (element) element.style.backgroundColor = originalColor;
-          }, 1500);
+              if (element) {
+                 element.style.backgroundColor = originalColor;
+              }
+          }, 2000);
+      } else {
+          // If not found, maybe it's in a hidden chunk?
+          if (hasMore) {
+              setVisibleChunks(chunks.length);
+              // Retry after render
+              setTimeout(() => scrollToTerm(term), 300);
+          }
       }
+  };
+  
+  // New function to handle raw string jumping from Quiz
+  const handleQuizJump = (text: string) => {
+      // 1. Ensure content is fully loaded if possible or search current content
+      // Heuristic: Search for text in visible DOM.
+      if (!articleRef.current) return;
+      
+      const cleanTarget = text.trim().toLowerCase();
+      // Try finding bold terms, explain-terms, or just plain text traversal
+      // Traversing all text nodes is expensive but accurate.
+      // Simplification: Look for 'b', 'strong', 'span' first.
+      
+      const findAndScroll = () => {
+          // Priority 1: Semantic Tags (years are usually bolded, terms are spans)
+          const priorityTags = articleRef.current?.querySelectorAll('b, strong, span.explain-term, span.smart-citation, mark') || [];
+          let targetEl: HTMLElement | null = null;
+          
+          for (let i = 0; i < priorityTags.length; i++) {
+              const el = priorityTags[i] as HTMLElement;
+              if (el.textContent?.toLowerCase().includes(cleanTarget)) {
+                  targetEl = el;
+                  break;
+              }
+          }
+          
+          // Priority 2: Headers
+          if (!targetEl) {
+              const headers = articleRef.current?.querySelectorAll('h1, h2, h3') || [];
+              for (let i = 0; i < headers.length; i++) {
+                  const el = headers[i] as HTMLElement;
+                  if (el.textContent?.toLowerCase().includes(cleanTarget)) {
+                      targetEl = el;
+                      break;
+                  }
+              }
+          }
+          
+          // Priority 3: Paragraphs containing the exact phrase
+          if (!targetEl) {
+              const paragraphs = articleRef.current?.querySelectorAll('p') || [];
+              for (let i = 0; i < paragraphs.length; i++) {
+                  const el = paragraphs[i] as HTMLElement;
+                  if (el.textContent?.toLowerCase().includes(cleanTarget)) {
+                      targetEl = el;
+                      break;
+                  }
+              }
+          }
+
+          if (targetEl) {
+              targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              
+              const originalTransition = targetEl.style.transition;
+              const originalBg = targetEl.style.backgroundColor;
+              
+              targetEl.style.transition = 'background-color 0.5s ease';
+              targetEl.style.backgroundColor = isDarkMode ? '#1a8917' : '#fef08a'; // Yellow/Green flash
+              
+              setTimeout(() => {
+                  targetEl!.style.backgroundColor = originalBg;
+                  setTimeout(() => {
+                      targetEl!.style.transition = originalTransition;
+                  }, 500);
+              }, 2000);
+          } else {
+             // If not found in current visible chunks, try expanding?
+             if (hasMore) {
+                 setVisibleChunks(chunks.length);
+                 setTimeout(() => handleQuizJump(text), 300);
+             } else {
+                 alert("Could not locate text in the article.");
+             }
+          }
+      };
+      
+      findAndScroll();
   };
 
   const getFontClass = () => {
@@ -753,8 +873,7 @@ const ArticleView: React.FC<ArticleViewProps> = ({
   const hoverBg = isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-50';
 
   const faqList = data.topQuestions || [];
-  // Use dynamically loaded citations instead of static full list
-  const citationList = visibleCitations;
+  const citationList = data.citations || [];
 
   const AiPanelOverlay = showAiPanel && (
         <div className="fixed inset-0 z-50 flex justify-end no-print">
@@ -764,7 +883,7 @@ const ArticleView: React.FC<ArticleViewProps> = ({
                     <div className="text-blue-600">
                         <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"></path></svg>
                     </div>
-                    <h2 className={`text-xl font-bold font-sans ${textMain}`}>MediumClone AI</h2>
+                    <h2 className={`text-xl font-bold font-sans ${textMain}`}>LumeaReader AI</h2>
                     <button onClick={() => setShowAiPanel(false)} className={`ml-auto ${textSecondary} hover:${textMain}`}>
                         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                     </button>
@@ -860,17 +979,65 @@ const ArticleView: React.FC<ArticleViewProps> = ({
 
   if (!data.title && !data.content) {
     return (
-      <div className={`${getContainerWidthClass()} mx-auto mt-24 text-center font-sans ${isDarkMode ? 'text-gray-400' : 'text-medium-gray'}`}>
+      <div className={`max-w-[680px] mx-auto mt-16 px-6 text-center animate-in fade-in duration-700`}>
         {AiPanelOverlay}
-        <h3 className={`text-xl mb-4 font-medium ${isDarkMode ? 'text-gray-200' : 'text-medium-black'}`}>{t('ready')}</h3>
-        <p>{t('readyDesc')}</p>
-        <p className="mt-2 text-sm text-gray-500">{t('customize')}</p>
+        
+        <div className="mb-12">
+            <h1 className={`text-4xl font-bold font-serif mb-3 ${isDarkMode ? 'text-white' : 'text-medium-black'}`}>Today's highlights</h1>
+            <p className={`${textSecondary} text-lg font-sans`}>Carefully curated for you. Discover the latest news and insights.</p>
+        </div>
+
+        <div className="space-y-6 text-left">
+            <div className="text-center text-[11px] font-bold tracking-[0.2em] uppercase text-gray-400 mb-8">
+                Try these today
+            </div>
+            
+            {dailyHighlights?.map((item, idx) => (
+                <div 
+                    key={idx}
+                    onClick={() => onLoadDemo && onLoadDemo(item.url)}
+                    className={`group flex items-center justify-between p-6 rounded-2xl border transition-all duration-300 cursor-pointer
+                    ${isDarkMode ? 'bg-[#1e1e1e] border-gray-800 hover:border-gray-600' : 'bg-white border-gray-200 hover:shadow-lg hover:border-medium-green'}`}
+                >
+                    <div className="flex-1 pr-6 overflow-hidden">
+                        <div className={`text-xs font-sans font-bold mb-1.5 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>{item.source}</div>
+                        <h3 className={`text-lg font-bold leading-snug mb-2 truncate ${textMain}`}>{item.title}</h3>
+                        <div className={`text-[11px] truncate font-mono ${textSecondary} opacity-60`}>{item.url}</div>
+                    </div>
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 transition-transform duration-300 group-hover:scale-110
+                        ${isDarkMode ? 'bg-gray-800 text-white group-hover:bg-medium-green' : 'bg-green-50 text-medium-green group-hover:bg-medium-green group-hover:text-white'}`}>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                    </div>
+                </div>
+            ))}
+            
+            {(!dailyHighlights || dailyHighlights.length === 0) && (
+                <div className="text-center text-gray-400 italic mt-8">
+                    Checking daily news...
+                </div>
+            )}
+        </div>
       </div>
     );
   }
 
   return (
     <div className={isDarkMode ? 'bg-[#121212]' : 'bg-white'}>
+      {/* READING PROGRESS BAR */}
+      <div className="fixed top-[65px] left-0 h-1 bg-medium-green z-40 transition-all duration-150 ease-out" style={{ width: `${scrollProgress * 100}%` }}></div>
+
+      {/* SCROLL TO TOP BUTTON */}
+      <button
+          onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+          className={`fixed bottom-8 right-8 z-50 w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-all duration-300 ${
+              scrollProgress > 0.5 ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10 pointer-events-none'
+          } ${isDarkMode ? 'bg-gray-800 text-white hover:bg-gray-700 border border-gray-700' : 'bg-white text-gray-800 hover:bg-gray-50 border border-gray-200'}`}
+          title="Back to Top"
+          aria-label="Scroll to top"
+      >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 15l-6-6-6 6"/></svg>
+      </button>
+
       <style>{`
         @media print {
             nav, button, .no-print { display: none !important; }
@@ -908,40 +1075,55 @@ const ArticleView: React.FC<ArticleViewProps> = ({
         }
       `}</style>
       
-      {/* TOC Sidebar */}
-      {toc.length > 0 && (
-          <div className={`hidden xl:block fixed left-10 top-32 w-56 no-print animate-in fade-in slide-in-from-left-4`}>
-              <div className="mb-4">
-                  <div className="flex items-center gap-3 mb-4">
-                      <h3 className={`font-bold text-base ${isDarkMode ? 'text-gray-200' : 'text-black'}`}>{t('tableOfContents')}</h3>
-                      <button 
-                          onClick={() => setIsTocOpen(!isTocOpen)} 
-                          className={`text-xs px-2 py-1 rounded-sm ${isDarkMode ? 'bg-gray-800 text-gray-400 hover:text-white' : 'bg-gray-100 text-gray-500 hover:text-black'}`}
-                      >
-                          {isTocOpen ? t('hide') : t('show')}
-                      </button>
-                  </div>
-                  
-                  {isTocOpen && (
-                      <nav>
-                          <ul className={`space-y-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                              {toc.map((item) => (
-                                  <li key={item.id} className="leading-tight">
-                                      <button 
-                                          onClick={() => handleTocClick(item.id)}
-                                          className={`text-left w-full hover:underline hover:text-blue-600 transition-colors ${isDarkMode ? 'hover:text-blue-400' : ''}`}
-                                          title={item.text}
-                                      >
-                                          {item.text}
-                                      </button>
-                                  </li>
-                              ))}
-                          </ul>
-                      </nav>
-                  )}
+      {/* LEFT SIDEBAR (TOC + QUIZ) */}
+      <div className={`hidden xl:block fixed left-10 top-32 w-72 no-print animate-in fade-in slide-in-from-left-4 h-[calc(100vh-100px)] overflow-y-auto pr-2 custom-scrollbar`}>
+          <div className="mb-8">
+              <div className="flex items-center gap-3 mb-4">
+                  <h3 className={`font-bold text-base ${isDarkMode ? 'text-gray-200' : 'text-black'}`}>{t('tableOfContents')}</h3>
+                  <button 
+                      onClick={() => setIsTocOpen(!isTocOpen)} 
+                      className={`text-xs px-2 py-1 rounded-sm ${isDarkMode ? 'bg-gray-800 text-gray-400 hover:text-white' : 'bg-gray-100 text-gray-500 hover:text-black'}`}
+                  >
+                      {isTocOpen ? t('hide') : t('show')}
+                  </button>
               </div>
+              
+              {isTocOpen && (
+                  <nav>
+                      {toc.length > 0 ? (
+                        <ul className={`space-y-3 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                            {toc.map((item) => (
+                                <li key={item.id} className="leading-tight">
+                                    <button 
+                                        onClick={() => handleTocClick(item.id)}
+                                        className={`text-left w-full hover:underline hover:text-blue-600 transition-colors ${isDarkMode ? 'hover:text-blue-400' : ''}`}
+                                        title={item.text}
+                                    >
+                                        {item.text}
+                                    </button>
+                                </li>
+                            ))}
+                        </ul>
+                      ) : (
+                        <p className={`text-xs italic ${textSecondary}`}>No headers found.</p>
+                      )}
+                  </nav>
+              )}
           </div>
-      )}
+          
+          {/* QUIZ WIDGET PLACEMENT */}
+          <div className="mt-12">
+             <QuizWidget 
+                articleTitle={data.title}
+                articleContent={data.content || ""}
+                thumbnailUrl={data.thumbnailUrl}
+                t={t}
+                isDarkMode={isDarkMode}
+                language={language}
+                onNavigateToText={handleQuizJump}
+             />
+          </div>
+      </div>
 
       {/* Rest of the component (zoom, share, article header/body) */}
       {zoomedImage && (
@@ -1069,21 +1251,21 @@ const ArticleView: React.FC<ArticleViewProps> = ({
                         <p className={`text-sm ${textSecondary} text-center mt-10`}>No citations found in this article.</p>
                     ) : (
                         citationList.map((cite, i) => (
-                            <div 
-                                key={i} 
-                                id={`sidebar-cite-${i}`} 
-                                className={`group pb-5 border-b ${isDarkMode ? 'border-gray-800' : 'border-gray-50'} last:border-0 hover:bg-gray-50 dark:hover:bg-gray-800/50 p-3 rounded transition-colors cursor-pointer`}
-                                onClick={() => scrollToTerm(cite)} // BI-DIRECTIONAL SCROLL: Clicking card scrolls to text
-                            >
-                                {/* Quote Section */}
-                                <div className="flex gap-3">
-                                     <div className="text-3xl leading-none font-serif text-gray-300 select-none transform translate-y-2">“</div>
-                                     <p className={`font-serif italic text-[17px] leading-relaxed ${textMain} group-hover:text-medium-black dark:group-hover:text-white transition-colors`}>
-                                        {cite.text}
-                                     </p>
+                            <div key={i} id={`sidebar-cite-${i}`} className={`group pb-5 border-b ${isDarkMode ? 'border-gray-800' : 'border-gray-50'} last:border-0`}>
+                                {/* Quote Section - Click to scroll */}
+                                <div 
+                                    className="cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 p-2 -mx-2 rounded transition-colors"
+                                    onClick={() => scrollToTerm(cite)}
+                                >
+                                    <div className="flex gap-3">
+                                         <div className="text-3xl leading-none font-serif text-gray-300 select-none transform translate-y-2">“</div>
+                                         <p className={`font-serif italic text-[17px] leading-relaxed ${textMain} group-hover:text-medium-black dark:group-hover:text-white transition-colors`}>
+                                            {cite.text}
+                                         </p>
+                                    </div>
                                 </div>
                                 
-                                {/* Source Section */}
+                                {/* Source Section - Click to open */}
                                 <div className="mt-3 pl-7">
                                     <div className="flex items-center gap-2 mb-1">
                                          <span className={`text-[10px] font-bold uppercase tracking-wider text-medium-gray`}>SOURCE</span>
@@ -1116,13 +1298,15 @@ const ArticleView: React.FC<ArticleViewProps> = ({
             ref={titleTextareaRef}
             value={data.title}
             onChange={(e) => {
+                if (!isOwner) return;
                 e.target.style.height = 'auto';
                 e.target.style.height = e.target.scrollHeight + 'px';
                 if (onTitleChange) onTitleChange(e.target.value);
             }}
+            readOnly={!isOwner}
             placeholder="Article Title"
             rows={1}
-            className={`w-full bg-transparent resize-none overflow-hidden outline-none text-[42px] leading-[52px] font-bold ${getFontClass()} tracking-tight ${textMain} mb-6 placeholder-gray-300 dark:placeholder-gray-700`}
+            className={`w-full bg-transparent resize-none overflow-hidden outline-none text-[42px] leading-[52px] font-bold ${getFontClass()} tracking-tight ${textMain} mb-6 placeholder-gray-300 dark:placeholder-gray-700 ${!isOwner ? 'cursor-default' : 'cursor-text'}`}
             style={{ minHeight: '52px' }}
           />
 
@@ -1165,7 +1349,7 @@ const ArticleView: React.FC<ArticleViewProps> = ({
                  <button 
                    onClick={() => setShowAiPanel(true)}
                    className={`relative ${textSecondary} hover:${textMain} hover:text-blue-600 transition-colors`}
-                   title="MediumClone AI"
+                   title="LumeaReader AI"
                  >
                      <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"></path></svg>
                  </button>
@@ -1185,16 +1369,15 @@ const ArticleView: React.FC<ArticleViewProps> = ({
                     )}
                  </button>
 
-                 {/* SMART CITATIONS BUTTON - CLEAN OUTLINED ICON */}
+                 {/* SMART CITATIONS BUTTON - STANDARD QUOTE ICON */}
                  <button 
                    onClick={() => setShowCitations(true)}
                    disabled={isCleanMode}
-                   className={`relative ${citationList.length > 0 ? textMain : textSecondary} hover:${textMain} transition-colors disabled:opacity-30`}
+                   className={`relative ${citationList.length > 0 ? textMain : textSecondary} hover:opacity-80 transition-opacity disabled:opacity-30`}
                    title={t('smartCitations')}
                  >
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                       <path d="M3 21c3 0 7-1 7-8V5c0-1.25-.756-2.017-2-2H4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V20c0 1 0 1 1 1z"></path>
-                       <path d="M15 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2h-4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V20c0 1 0 1 1 1z"></path>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                       <path d="M14.017 21L14.017 18C14.017 16.8954 14.9124 16 16.017 16H19.017C19.5693 16 20.017 15.5523 20.017 15V9C20.017 8.44772 19.5693 8 19.017 8H15.017C14.4647 8 14.017 7.55228 14.017 7V5C14.017 4.44772 14.4647 4 15.017 4H19.017C20.6739 4 22.017 5.34315 22.017 7V15C22.017 16.6569 20.6739 18 19.017 18H16.017V21H14.017ZM5.0166 21L5.0166 18C5.0166 16.8954 5.91203 16 7.0166 16H10.0166C10.5689 16 11.0166 15.5523 11.0166 15V9C11.0166 8.44772 10.5689 8 10.0166 8H6.0166C5.46432 8 5.0166 7.55228 5.0166 7V5C5.0166 4.44772 5.46432 4 6.0166 4H10.0166C11.6735 4 13.0166 5.34315 13.0166 7V15C13.0166 16.6569 11.6735 18 10.0166 18H7.0166V21H5.0166Z" />
                     </svg>
                     {citationList.length > 0 && !isCleanMode && (
                         <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
@@ -1324,21 +1507,21 @@ const ArticleView: React.FC<ArticleViewProps> = ({
           ref={articleRef}
           className={`
               ${getFontClass()} ${getFontSizeClass()} ${textMain}
-              [&>p]:mb-8 [&>p]:font-normal
+              [&>p]:mb-6 [&>p]:font-normal [&>p:empty]:hidden
               [&>h2]:text-2xl [&>h2]:font-bold [&>h2]:mt-10 [&>h2]:mb-4
               [&>p>mark]:bg-transparent
               [&>ul]:list-disc [&>ul]:pl-5 [&>ul]:mb-6 [&>ul]:space-y-2
               [&>ol]:list-decimal [&>ol]:pl-5 [&>ol]:mb-6 [&>ol]:space-y-2
               [&>li]:pl-1
               [&>blockquote]:border-l-4 [&>blockquote]:border-current [&>blockquote]:pl-4 [&>blockquote]:italic [&>blockquote]:text-2xl [&>blockquote]:font-serif [&>blockquote]:my-8 [&>blockquote]:opacity-80
-              [&>figure]:my-10 [&>figure]:w-full
-              [&>figure>img]:w-full [&>figure>img]:h-auto [&>figure>img]:rounded-sm
+              [&>figure]:my-8 [&>figure]:w-full
+              [&>figure>img]:w-full [&>figure>img]:md:w-[85%] [&>figure>img]:mx-auto [&>figure>img]:rounded-sm
               [&>figure>iframe]:w-full [&>figure>iframe]:aspect-video [&>figure>iframe]:rounded-sm
               [&>figure>video]:w-full [&>figure>video]:aspect-video [&>figure>video]:rounded-sm
               [&>figure>figcaption]:mt-3 [&>figure>figcaption]:text-sm [&>figure>figcaption]:text-center [&>figure>figcaption]:text-gray-500 [&>figure>figcaption]:font-sans [&>figure>figcaption]:italic
               [&>iframe]:w-full [&>iframe]:rounded-sm [&>iframe]:my-8 [&>iframe]:aspect-video
               [&>video]:w-full [&>video]:rounded-sm [&>video]:my-8 [&>video]:aspect-video
-              [&>.pdf-page-visual]:my-8 [&>.pdf-page-visual]:p-4 [&>.pdf-page-visual]:bg-gray-50 [&>.pdf-page-visual]:rounded [&>.pdf-page-visual]:border [&>.pdf-page-visual>img]:w-full [&>.pdf-page-visual>img]:border [&>.pdf-page-visual>p]:text-xs [&>.pdf-page-visual>p]:font-bold [&>.pdf-page-visual>p]:uppercase [&>.pdf-page-visual>p]:text-gray-400 [&>.pdf-page-visual>p]:mb-2
+              [&>.pdf-page-visual]:my-8 [&>.pdf-page-visual]:p-4 [&>.pdf-page-visual]:bg-gray-50 [&>.pdf-page-visual]:rounded [&>.pdf-page-visual]:border [&>.pdf-page-visual>img]:w-full [&>.pdf-page-visual>img]:md:w-[85%] [&>.pdf-page-visual>img]:mx-auto [&>.pdf-page-visual>img]:border [&>.pdf-page-visual>p]:text-xs [&>.pdf-page-visual>p]:font-bold [&>.pdf-page-visual>p]:uppercase [&>.pdf-page-visual>p]:text-gray-400 [&>.pdf-page-visual>p]:mb-2
           `}
           dangerouslySetInnerHTML={{ __html: contentToRender }} 
         />
@@ -1416,16 +1599,15 @@ const ArticleView: React.FC<ArticleViewProps> = ({
                                 <span>{comment.author.substring(0, 2).toUpperCase()}</span>
                              </div>
                              <div>
-                                 <div className="text-sm font-sans font-medium">{comment.author}</div>
-                                 <div className="text-xs text-gray-400 font-sans">{comment.date}</div>
+                                 <div className={`text-sm font-sans font-medium ${textMain}`}>{comment.author}</div>
+                                 <div className={`text-xs ${textSecondary}`}>{comment.date}</div>
                              </div>
                         </div>
-                        <p className={`${getFontClass()} ${textMain} text-sm leading-relaxed`}>{comment.text}</p>
+                        <p className={`text-sm ${getFontClass()} ${textMain} leading-relaxed`}>{comment.text}</p>
                     </div>
                 ))}
             </div>
         </div>
-
       </article>
     </div>
   );
