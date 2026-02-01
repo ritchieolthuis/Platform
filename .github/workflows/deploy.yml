@@ -3,6 +3,7 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: ["main"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,18 +14,23 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Setup Node
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: 'lts/*'
           cache: 'npm'
+
       - name: Install dependencies
         run: npm install
-      - name: Build with Base Path
+
+      - name: Build
         run: npm run build -- --base=/Platform/
         env:
           VITE_GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
