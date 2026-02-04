@@ -4,6 +4,7 @@ import { ArticleData, FontType, FontSize, PageWidth, HighlightOptions, Citation,
 import { addCommentToDb, getCommentsFromDb } from '../services/firebase';
 import { fetchAudioForChunk, splitTextIntoChunks, askAiAboutArticle } from '../services/parserService';
 import QuizWidget from './QuizWidget';
+import AuditorWidget from './AuditorWidget';
 
 interface ArticleViewProps {
   data: ArticleData;
@@ -22,7 +23,7 @@ interface ArticleViewProps {
   t: (key: string) => string;
   onNavigateLibrary?: () => void;
   onNavigateHome?: () => void;
-  onLoadDemo?: (url: string) => void;
+  onLoadDemo?: (url: string, title: string) => void;
   dailyHighlights?: Array<{ title: string; source: string; url: string }>;
   language?: string;
   currentUser?: User | null;
@@ -61,7 +62,7 @@ const ArticleView: React.FC<ArticleViewProps> = ({
     isSaved, 
     isDarkMode = false, 
     font, 
-    fontSize = 'standard',
+    fontSize = 'standard', 
     pageWidth = 'standard',
     onTitleChange,
     globalAiQuery,
@@ -132,6 +133,51 @@ const ArticleView: React.FC<ArticleViewProps> = ({
   const chunksRef = useRef<string[]>([]);
   const currentChunkIndexRef = useRef(0);
 
+  // Reading Mode State
+  const [isReadingMode, setIsReadingMode] = useState(false);
+  const [rmSettings, setRmSettings] = useState({
+    font: 'sans', // sans, serif, mono, comic
+    size: 20, // px
+    lineHeight: 1.5,
+    letterSpacing: 0, // px
+    theme: 'light' // light, yellow, dark, blue
+  });
+  const [showRmSettings, setShowRmSettings] = useState(false);
+  
+  // Resizable Reading Mode side panel state
+  const [rmWidth, setRmWidth] = useState(672); // Default to max-w-2xl
+  const [isResizing, setIsResizing] = useState(false);
+
+  // Clean content for Reading Mode
+  const readingModeContent = React.useMemo(() => {
+    if (!data.content) return '';
+    try {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(data.content, 'text/html');
+        // Remove media and interactive elements for pure reading experience
+        const elementsToRemove = doc.querySelectorAll('img, video, iframe, figure, script, style, .quiz-widget, .pdf-page-visual');
+        elementsToRemove.forEach(el => el.remove());
+        
+        // Unwrap complex spans to simplify text selection and rendering
+        const spans = doc.querySelectorAll('span');
+        spans.forEach(span => {
+             const text = span.textContent;
+             if(text) span.replaceWith(document.createTextNode(text));
+        });
+
+        // Remove marks styling but keep text
+        const marks = doc.querySelectorAll('mark');
+        marks.forEach(mark => {
+            const text = mark.textContent;
+            if(text) mark.replaceWith(document.createTextNode(text));
+        });
+        
+        return doc.body.innerHTML;
+    } catch(e) {
+        return data.content;
+    }
+  }, [data.content]);
+
   // Handle Global AI Query (from Navbar)
   useEffect(() => {
     if (globalAiQuery && globalAiQuery.trim()) {
@@ -200,6 +246,31 @@ const ArticleView: React.FC<ArticleViewProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  // Handle Side Panel Resizing
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing) return;
+      const newWidth = window.innerWidth - e.clientX;
+      if (newWidth > 320 && newWidth < window.innerWidth * 0.95) {
+          setRmWidth(newWidth);
+      }
+    };
+    const handleMouseUp = () => {
+        setIsResizing(false);
+        document.body.style.userSelect = '';
+    };
+    
+    if (isResizing) {
+      document.body.style.userSelect = 'none';
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    }
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing]);
+
   // Effect to apply custom highlights client-side for robust coloring
   useEffect(() => {
     if (!articleRef.current || !showHighlights || isCleanMode) return;
@@ -262,6 +333,7 @@ const ArticleView: React.FC<ArticleViewProps> = ({
     setAiChat([]);
     setIsCleanMode(false);
     setScrollProgress(0);
+    setIsReadingMode(false);
 
   }, [data.id]);
 
@@ -357,6 +429,9 @@ const ArticleView: React.FC<ArticleViewProps> = ({
 
     const images = container.querySelectorAll('img');
     images.forEach(img => {
+        // Fix for Hotlink Protection (e.g. Britannica)
+        img.setAttribute('referrerpolicy', 'no-referrer');
+
         img.style.cursor = 'zoom-in';
         img.onclick = (e) => {
             e.stopPropagation();
@@ -365,10 +440,18 @@ const ArticleView: React.FC<ArticleViewProps> = ({
         
         img.onerror = () => {
              const currentSrc = img.src;
-             if (!currentSrc.includes('corsproxy.io') && !currentSrc.startsWith('data:')) {
-                 img.src = `https://corsproxy.io/?${encodeURIComponent(currentSrc)}`;
+             // If image fails, try proxy if not already used
+             // Check against both short and long domains of the proxy service
+             if (!currentSrc.includes('wsrv.nl') && !currentSrc.includes('weserv.nl')) {
+                 img.src = `https://wsrv.nl/?url=${encodeURIComponent(currentSrc)}&w=800&output=webp`;
              } else {
-                 img.style.display = 'none'; 
+                 // Even proxy failed? Show a nice placeholder with alt text
+                 img.style.display = 'none'; // Hide broken image icon
+                 const alt = img.getAttribute('alt') || 'Image unavailable';
+                 const placeholder = document.createElement('div');
+                 placeholder.className = 'bg-gray-100 dark:bg-gray-800 p-4 rounded text-xs text-gray-500 text-center italic border border-dashed border-gray-300 dark:border-gray-700';
+                 placeholder.textContent = `[Image: ${alt}]`;
+                 img.parentNode?.insertBefore(placeholder, img);
              }
         };
         img.loading = "lazy";
@@ -418,11 +501,18 @@ const ArticleView: React.FC<ArticleViewProps> = ({
              setShowCitations(true);
              
              // Smart Citation Link Logic: Click text -> Open Sidebar & Scroll to Card
-             const text = citationEl.textContent?.trim();
-             if (text && data.citations) {
-                 // Try to match by exact text. 
-                 const index = data.citations.findIndex(c => c.text.trim() === text);
+             // Robust finding logic: Try exact match first, then fuzzy
+             const text = citationEl.textContent?.trim() || "";
+             if (data.citations && data.citations.length > 0) {
+                 // 1. Try exact match
+                 let index = data.citations.findIndex(c => c.text.trim() === text);
                  
+                 // 2. Try simple includes match if exact fails
+                 if (index === -1) {
+                     index = data.citations.findIndex(c => c.text.includes(text) || text.includes(c.text));
+                 }
+
+                 // 3. Last resort: just open the list (already done by setShowCitations(true))
                  if (index !== -1) {
                      // Wait slightly for sidebar to animate in if it wasn't open
                      setTimeout(() => {
@@ -529,8 +619,8 @@ const ArticleView: React.FC<ArticleViewProps> = ({
              summary { cursor: pointer; font-weight: bold; font-family: Helvetica, Arial, sans-serif; }
              figure { margin: 30px 0; width: 100%; }
              figcaption { font-style: italic; color: #757575; font-size: 0.9em; text-align: center; margin-top: 10px; }
-             ${!isCleanMode ? '.explain-term { text-decoration: underline; text-decoration-style: dotted; cursor: help; }' : ''}
-             ${!isCleanMode ? '.smart-citation { border-bottom: 2px dashed #8b5cf6; cursor: pointer; color: #6d28d9; }' : ''}
+             ${!isCleanMode ? '.explain-term { border-bottom: 2px dotted #1a8917; text-decoration: none; cursor: help; }' : ''}
+             ${!isCleanMode ? '.smart-citation { border-bottom: 2px dashed #8b5cf6; cursor: pointer; color: #6d28d9; text-decoration: none; }' : ''}
           </style>
         </head>
         <body>
@@ -866,6 +956,11 @@ const ArticleView: React.FC<ArticleViewProps> = ({
       return pageWidth === 'full' ? 'max-w-[960px]' : 'max-w-[680px]';
   };
 
+  const startResizing = (e: React.MouseEvent) => {
+    setIsResizing(true);
+    e.preventDefault();
+  };
+
   const textMain = isDarkMode ? 'text-medium-darkText' : 'text-medium-black';
   const textSecondary = isDarkMode ? 'text-medium-darkGray' : 'text-medium-gray';
   const borderCol = isDarkMode ? 'border-gray-800' : 'border-gray-100';
@@ -874,6 +969,46 @@ const ArticleView: React.FC<ArticleViewProps> = ({
 
   const faqList = data.topQuestions || [];
   const citationList = data.citations || [];
+
+  // Helper to extract clickable URL from source string if it follows [Name]: (URL) format
+  const renderSourceWithLink = (source: string) => {
+    const urlMatch = source.match(/\((https?:\/\/[^\s)]+)\)/);
+    if (urlMatch) {
+        const url = urlMatch[1];
+        const textPart = source.replace(urlMatch[0], '').trim();
+        return (
+            <p className={`text-sm font-bold ${textMain}`}>
+                {textPart} 
+                <a 
+                    href={url} 
+                    target="_blank" 
+                    rel="noopener noreferrer" 
+                    className="ml-1 text-blue-600 hover:underline inline-block truncate max-w-[200px]"
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    ({url})
+                </a>
+            </p>
+        );
+    }
+    
+    // Fallback for plain URLs
+    if (source.startsWith('http')) {
+        return (
+            <a 
+                href={source} 
+                target="_blank" 
+                rel="noopener noreferrer" 
+                className={`text-sm font-bold ${textMain} hover:underline decoration-1 underline-offset-2 truncate block`}
+                onClick={(e) => e.stopPropagation()} 
+            >
+                {source}
+            </a>
+        );
+    }
+
+    return <p className={`text-sm font-bold ${textMain}`}>{source}</p>;
+  };
 
   const AiPanelOverlay = showAiPanel && (
         <div className="fixed inset-0 z-50 flex justify-end no-print">
@@ -995,7 +1130,7 @@ const ArticleView: React.FC<ArticleViewProps> = ({
             {dailyHighlights?.map((item, idx) => (
                 <div 
                     key={idx}
-                    onClick={() => onLoadDemo && onLoadDemo(item.url)}
+                    onClick={() => onLoadDemo && onLoadDemo(item.url, item.title)}
                     className={`group flex items-center justify-between p-6 rounded-2xl border transition-all duration-300 cursor-pointer
                     ${isDarkMode ? 'bg-[#1e1e1e] border-gray-800 hover:border-gray-600' : 'bg-white border-gray-200 hover:shadow-lg hover:border-medium-green'}`}
                 >
@@ -1055,6 +1190,24 @@ const ArticleView: React.FC<ArticleViewProps> = ({
         .ai-message-content ul { list-style-type: disc; padding-left: 1.2em; margin-bottom: 0.5em; }
         .ai-message-content li { margin-bottom: 0.2em; }
         
+        /* Interactive Term Styling */
+        .explain-term {
+             border-bottom: 2px dotted #1a8917;
+             text-decoration: none;
+             cursor: help;
+             transition: all 0.2s;
+        }
+        .explain-term:hover {
+             background-color: rgba(26, 137, 23, 0.1);
+             border-bottom-style: solid;
+        }
+        .dark .explain-term {
+             border-bottom-color: #4ade80;
+        }
+        .dark .explain-term:hover {
+             background-color: rgba(74, 222, 128, 0.2);
+        }
+
         /* Smart Citation Styling */
         .smart-citation {
              border-bottom: 2px dashed #8b5cf6;
@@ -1073,6 +1226,11 @@ const ArticleView: React.FC<ArticleViewProps> = ({
         .dark .smart-citation:hover {
              background-color: rgba(167, 139, 250, 0.2);
         }
+        /* Custom Scrollbar for Reader */
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(156, 163, 175, 0.5); border-radius: 3px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(107, 114, 128, 0.8); }
       `}</style>
       
       {/* LEFT SIDEBAR (TOC + QUIZ) */}
@@ -1125,6 +1283,151 @@ const ArticleView: React.FC<ArticleViewProps> = ({
           </div>
       </div>
 
+      {/* RIGHT SIDEBAR (INTEGRITY AUDITOR) - NEW */}
+      <div className="hidden xl:block">
+          <AuditorWidget 
+             articleText={data.content || ""} 
+             citations={data.citations?.map(c => c.source + (c.source.startsWith('http') ? '' : ` (${c.text})`)) || [data.sourceUrl || ""]} 
+             isDarkMode={isDarkMode}
+             language={language}
+          />
+      </div>
+
+      {/* READING MODE SIDE PANEL */}
+      {isReadingMode && (
+          <div className="fixed inset-0 z-[100] flex justify-end no-print">
+              <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={() => setIsReadingMode(false)}></div>
+              <div 
+                  style={{ width: `${rmWidth}px` }}
+                  className={`relative h-full shadow-2xl flex flex-col animate-in slide-in-from-right-10 duration-300
+                    ${rmSettings.theme === 'light' ? 'bg-white text-gray-900' : ''}
+                    ${rmSettings.theme === 'yellow' ? 'bg-[#fef9c3] text-gray-900' : ''}
+                    ${rmSettings.theme === 'blue' ? 'bg-[#dbeafe] text-gray-900' : ''}
+                    ${rmSettings.theme === 'dark' ? 'bg-[#121212] text-gray-100' : ''}
+              `}>
+                  {/* Resize Handle */}
+                  <div 
+                    onMouseDown={startResizing}
+                    className="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-blue-500/30 transition-colors z-[110]"
+                  />
+
+                  {/* Reading Mode Header */}
+                  <div className={`flex items-center justify-between p-4 border-b ${rmSettings.theme === 'dark' ? 'border-gray-800' : 'border-black/5'}`}>
+                       <h2 className="font-sans font-bold text-lg">Reading Mode</h2>
+                       
+                       <div className="flex items-center gap-2">
+                           <button 
+                              onClick={() => setShowRmSettings(!showRmSettings)}
+                              className={`p-2 rounded hover:bg-black/5 relative ${showRmSettings ? 'bg-black/5' : ''}`}
+                              title="Text Settings"
+                           >
+                               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                   <path d="M4 7V4h16v3M9 20h6M12 4v16" />
+                               </svg>
+                           </button>
+                           
+                           <button onClick={() => setIsReadingMode(false)} className="p-2 rounded hover:bg-black/5" title="Close">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                           </button>
+                       </div>
+                  </div>
+                  
+                  {/* Reading Mode Settings Popup */}
+                  {showRmSettings && (
+                      <div className={`absolute top-16 right-4 z-50 w-72 p-4 rounded-xl shadow-xl border animate-in fade-in zoom-in-95
+                          ${rmSettings.theme === 'dark' ? 'bg-[#1e1e1e] border-gray-700 text-white' : 'bg-white border-gray-200 text-gray-900'}
+                      `}>
+                          <div className="space-y-4">
+                              {/* Font Family */}
+                              <div>
+                                  <div className="text-xs font-bold uppercase tracking-wider opacity-60 mb-2">Font</div>
+                                  <div className={`grid grid-cols-2 gap-2`}>
+                                      <button onClick={() => setRmSettings(p => ({...p, font: 'sans'}))} className={`px-2 py-1.5 text-sm rounded border ${rmSettings.font === 'sans' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-800'}`}>Sans-serif</button>
+                                      <button onClick={() => setRmSettings(p => ({...p, font: 'serif'}))} className={`px-2 py-1.5 text-sm font-serif rounded border ${rmSettings.font === 'serif' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-800'}`}>Serif</button>
+                                      <button onClick={() => setRmSettings(p => ({...p, font: 'mono'}))} className={`px-2 py-1.5 text-sm font-mono rounded border ${rmSettings.font === 'mono' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-800'}`}>Monospace</button>
+                                      <button onClick={() => setRmSettings(p => ({...p, font: 'comic'}))} className={`px-2 py-1.5 text-sm font-dyslexic rounded border ${rmSettings.font === 'comic' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-800'}`} style={{ fontFamily: '"Comic Sans MS", cursive' }}>Comic</button>
+                                  </div>
+                              </div>
+
+                              {/* Font Size */}
+                              <div>
+                                  <div className="text-xs font-bold uppercase tracking-wider opacity-60 mb-2">Size ({rmSettings.size}px)</div>
+                                  <div className="flex items-center gap-3">
+                                      <button onClick={() => setRmSettings(p => ({...p, size: Math.max(12, p.size - 2)}))} className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700">A-</button>
+                                      <input 
+                                        type="range" min="12" max="48" step="1" 
+                                        value={rmSettings.size} 
+                                        onChange={(e) => setRmSettings(p => ({...p, size: parseInt(e.target.value)}))}
+                                        className="flex-1 h-1 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700 accent-blue-600"
+                                      />
+                                      <button onClick={() => setRmSettings(p => ({...p, size: Math.min(48, p.size + 2)}))} className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-lg">A+</button>
+                                  </div>
+                              </div>
+
+                              {/* Theme */}
+                              <div>
+                                  <div className="text-xs font-bold uppercase tracking-wider opacity-60 mb-2">Theme</div>
+                                  <div className="flex gap-2">
+                                      {['light', 'yellow', 'blue', 'dark'].map((th) => (
+                                          <button 
+                                            key={th} 
+                                            onClick={() => setRmSettings(p => ({...p, theme: th as any}))}
+                                            className={`w-8 h-8 rounded-full border-2 ${rmSettings.theme === th ? 'border-blue-500 scale-110' : 'border-gray-300 dark:border-gray-600'}`}
+                                            style={{ 
+                                                backgroundColor: th === 'light' ? '#fff' : th === 'yellow' ? '#fef9c3' : th === 'blue' ? '#dbeafe' : '#121212'
+                                            }}
+                                          />
+                                      ))}
+                                  </div>
+                              </div>
+
+                              {/* Spacing */}
+                              <div className="grid grid-cols-2 gap-4">
+                                  <div>
+                                      <div className="text-xs font-bold uppercase tracking-wider opacity-60 mb-2">Line Height</div>
+                                      <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded p-1">
+                                          {[1.2, 1.5, 2.0].map((lh) => (
+                                              <button key={lh} onClick={() => setRmSettings(p => ({...p, lineHeight: lh}))} className={`flex-1 text-xs py-1 rounded ${rmSettings.lineHeight === lh ? 'bg-white dark:bg-gray-600 shadow' : ''}`}>{lh}x</button>
+                                          ))}
+                                      </div>
+                                  </div>
+                                  <div>
+                                      <div className="text-xs font-bold uppercase tracking-wider opacity-60 mb-2">Letter Spacing</div>
+                                      <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded p-1">
+                                          {[0, 1, 2].map((ls) => (
+                                              <button key={ls} onClick={() => setRmSettings(p => ({...p, letterSpacing: ls}))} className={`flex-1 text-xs py-1 rounded ${rmSettings.lineHeight === ls ? 'bg-white dark:bg-gray-600 shadow' : ''}`}>{ls}px</button>
+                                          ))}
+                                      </div>
+                                  </div>
+                              </div>
+                          </div>
+                      </div>
+                  )}
+
+                  {/* Reading Content */}
+                  <div className="flex-1 overflow-y-auto p-8 md:p-12 custom-scrollbar select-text">
+                      <div 
+                          className={`mx-auto transition-all duration-300
+                              ${rmSettings.font === 'sans' ? 'font-sans' : ''}
+                              ${rmSettings.font === 'serif' ? 'font-serif' : ''}
+                              ${rmSettings.font === 'mono' ? 'font-mono' : ''}
+                          `}
+                          style={{
+                              fontSize: `${rmSettings.size}px`,
+                              lineHeight: rmSettings.lineHeight,
+                              letterSpacing: `${rmSettings.letterSpacing}px`,
+                              fontFamily: rmSettings.font === 'comic' ? '"Comic Sans MS", cursive' : undefined,
+                              maxWidth: '100%'
+                          }}
+                      >
+                          <h1 className="font-bold mb-8 leading-tight">{data.title}</h1>
+                          <div dangerouslySetInnerHTML={{ __html: readingModeContent }} className="[&>p]:mb-6 [&>h2]:font-bold [&>h2]:text-xl [&>h2]:mt-8 [&>h2]:mb-4" />
+                      </div>
+                  </div>
+              </div>
+          </div>
+      )}
+
       {/* Rest of the component (zoom, share, article header/body) */}
       {zoomedImage && (
           <div 
@@ -1163,7 +1466,7 @@ const ArticleView: React.FC<ArticleViewProps> = ({
                 onClick={() => handleGlossaryDeepDive(activeTerm.text)}
                 className="text-xs text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1"
               >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"></path></svg>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L12 2Z"></path></svg>
                   Ask AI for details
               </button>
               <div 
@@ -1218,7 +1521,7 @@ const ArticleView: React.FC<ArticleViewProps> = ({
                                     }} 
                                     className={`mt-2 text-xs font-medium flex items-center gap-1 ${textMain} opacity-60 hover:opacity-100 hover:text-blue-600 transition-all`}
                                 >
-                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"></path></svg>
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L12 2Z"></path></svg>
                                     ✨ Ask AI for deep dive
                                 </button>
                             </div>
@@ -1235,20 +1538,22 @@ const ArticleView: React.FC<ArticleViewProps> = ({
             <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" onClick={() => setShowCitations(false)}></div>
             <div className={`relative w-full max-w-md h-full ${bgSurface} border-l ${borderCol} shadow-2xl animate-in slide-in-from-right-10 duration-300 flex flex-col`}>
                 <div className={`p-5 border-b ${borderCol} flex justify-between items-center`}>
-                    <h2 className={`text-xl font-bold font-serif ${textMain}`}>{t('smartCitations')}</h2>
+                    <h2 className={`text-2xl font-bold font-serif ${textMain}`}>{t('smartCitations')}</h2>
                     <button onClick={() => setShowCitations(false)} className={`${textSecondary} hover:${textMain}`}>
                         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                     </button>
                 </div>
                 
-                <div className={`px-5 py-3 ${isDarkMode ? 'bg-purple-900/20 text-purple-100' : 'bg-purple-50 text-purple-800'} text-xs flex items-start gap-2 border-b ${borderCol}`}>
-                    <svg className="flex-shrink-0 mt-0.5" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
-                    <p>{t('citationsDesc')}</p>
+                <div className={`px-5 py-3 ${isDarkMode ? 'bg-purple-900/10 text-purple-300' : 'bg-[#f5f0ff] text-purple-800'} text-[13px] flex items-center gap-2 border-b ${borderCol}`}>
+                    <svg className="flex-shrink-0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" transform="rotate(-45)"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+                    <p className="font-medium">{t('citationsDesc')}</p>
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-5 space-y-6">
                     {citationList.length === 0 ? (
-                        <p className={`text-sm ${textSecondary} text-center mt-10`}>No citations found in this article.</p>
+                        <div className="flex flex-col items-center justify-center h-full opacity-40">
+                             <p className={`text-sm ${textSecondary} text-center mt-10`}>No citations found in this article.</p>
+                        </div>
                     ) : (
                         citationList.map((cite, i) => (
                             <div key={i} id={`sidebar-cite-${i}`} className={`group pb-5 border-b ${isDarkMode ? 'border-gray-800' : 'border-gray-50'} last:border-0`}>
@@ -1265,24 +1570,12 @@ const ArticleView: React.FC<ArticleViewProps> = ({
                                     </div>
                                 </div>
                                 
-                                {/* Source Section - Click to open */}
+                                {/* Source Section - Enhanced for clickable URLs in the new format */}
                                 <div className="mt-3 pl-7">
                                     <div className="flex items-center gap-2 mb-1">
                                          <span className={`text-[10px] font-bold uppercase tracking-wider text-medium-gray`}>SOURCE</span>
                                     </div>
-                                    {cite.source.startsWith('http') ? (
-                                        <a 
-                                            href={cite.source} 
-                                            target="_blank" 
-                                            rel="noopener noreferrer" 
-                                            className={`text-sm font-bold ${textMain} hover:underline decoration-1 underline-offset-2 truncate block`}
-                                            onClick={(e) => e.stopPropagation()} 
-                                        >
-                                            {cite.source}
-                                        </a>
-                                    ) : (
-                                        <p className={`text-sm font-bold ${textMain}`}>{cite.source}</p>
-                                    )}
+                                    {renderSourceWithLink(cite.source)}
                                 </div>
                             </div>
                         ))
@@ -1315,7 +1608,7 @@ const ArticleView: React.FC<ArticleViewProps> = ({
                 onClick={() => setShowAiPanel(true)}
                 className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded font-bold font-sans text-sm transition-colors"
               >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"></path></svg>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L12 2Z"></path></svg>
                   {t('askAnything')}
               </button>
               <button 
@@ -1346,12 +1639,27 @@ const ArticleView: React.FC<ArticleViewProps> = ({
               </div>
               
               <div className="flex items-center space-x-6">
+                 {/* NEW READING MODE BUTTON */}
+                 <button 
+                    onClick={() => setIsReadingMode(true)}
+                    className={`hover:${textMain} transition-colors ${isReadingMode ? textMain : textSecondary}`}
+                    title="Reading Mode"
+                 >
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                       <polyline points="14 2 14 8 20 8"></polyline>
+                       <line x1="16" y1="13" x2="8" y2="13"></line>
+                       <line x1="16" y1="17" x2="8" y2="17"></line>
+                       <polyline points="10 9 9 9 8 9"></polyline>
+                    </svg>
+                 </button>
+
                  <button 
                    onClick={() => setShowAiPanel(true)}
                    className={`relative ${textSecondary} hover:${textMain} hover:text-blue-600 transition-colors`}
                    title="LumeaReader AI"
                  >
-                     <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"></path></svg>
+                     <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L12 2Z"></path></svg>
                  </button>
 
                  <button 

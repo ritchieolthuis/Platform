@@ -107,7 +107,23 @@
         color: #ffffff;
       }
       
-      /* Interactive Terms Styling - Enhanced */
+      /* Arceren (Highlighting) Styling - FORCED VISIBILITY */
+      mark {
+        background-color: #cffafe !important;
+        color: #242424 !important;
+        padding: 0 4px;
+        margin: 0 -2px;
+        border-radius: 3px;
+        display: inline;
+        box-decoration-break: clone;
+        -webkit-box-decoration-break: clone;
+      }
+      .dark mark {
+        background-color: rgba(6, 182, 212, 0.4) !important;
+        color: #ffffff !important;
+      }
+
+      /* Interactive Terms (Glossary) Styling */
       .explain-term {
         cursor: help;
         border-bottom: 2px dotted #1a8917;
@@ -115,17 +131,28 @@
         transition: all 0.2s ease;
       }
       .explain-term:hover {
-        background-color: rgba(26, 137, 23, 0.15);
+        background-color: rgba(26, 137, 23, 0.1);
         border-bottom-style: solid;
-        color: #156d12;
       }
       .dark .explain-term {
         border-bottom-color: #4ade80;
-        color: inherit;
       }
-      .dark .explain-term:hover {
-        background-color: rgba(74, 222, 128, 0.2);
-        color: #4ade80;
+
+      /* Smart Citations Styling */
+      .smart-citation {
+        border-bottom: 2px dashed #8b5cf6;
+        cursor: pointer;
+        color: #6d28d9;
+        transition: all 0.2s ease;
+        text-decoration: none;
+      }
+      .smart-citation:hover {
+        background-color: rgba(139, 92, 246, 0.1);
+        border-bottom-style: solid;
+      }
+      .dark .smart-citation {
+        border-bottom-color: #a78bfa;
+        color: #a78bfa;
       }
     </style>
   <script type="importmap">

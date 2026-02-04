@@ -1,11 +1,12 @@
 
+
 import { initializeApp } from 'firebase/app';
 import { getFirestore, doc, setDoc, getDoc, collection, getDocs, query, orderBy, addDoc, where } from 'firebase/firestore';
 import { ArticleData, User, UserSettings } from '../types';
 
 // --- Configuration ---
 const firebaseConfig = {
-  apiKey: "AIzaSyAXzFXDk-VIMIl3HqcFlg878_lHbpRCYz8",
+  apiKey: "AIzaSyDq6kR16T32oti8NySxnHLU7o7K64sxJx8",
   authDomain: "platform-c2b92.firebaseapp.com",
   projectId: "platform-c2b92",
   storageBucket: "platform-c2b92.firebasestorage.app",

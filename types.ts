@@ -1,4 +1,5 @@
 
+
 export interface HighlightOptions {
   minLength: number;
   keywords: string[];
@@ -37,6 +38,53 @@ export interface Quiz {
   questions: QuizQuestion[];
 }
 
+export interface AuditPoint {
+  category: 'Evidence' | 'Framing' | 'Omission' | 'Logic' | 'Sources';
+  status: 'pass' | 'warning' | 'fail';
+  finding: string;
+  details: string;
+}
+
+export interface AuditResult {
+  score: number; // 1-10
+  summary: string;
+  points: AuditPoint[];
+  verdict: string;
+}
+
+// New Types for Deep Audit Dashboard
+export interface ClaimAnalysis {
+  claim: string;
+  type: 'Fact' | 'Opinion' | 'Hybrid';
+  verification: string;
+}
+
+export interface Fallacy {
+  name: string;
+  quote: string;
+  explanation: string;
+}
+
+export interface ToneAnalysis {
+  emotionalScore: number; // 0-100
+  objectiveScore: number; // 0-100
+  dominantTone: string;
+}
+
+export interface CitationAnalysis {
+  source: string;
+  context: string;
+  credibility: string;
+}
+
+export interface DeepAuditResult {
+  claims: ClaimAnalysis[];
+  fallacies: Fallacy[];
+  tone: ToneAnalysis;
+  citations: CitationAnalysis[];
+  authorAnalysis: string;
+}
+
 export interface ArticleData {
   id: string;
   title: string;
@@ -51,8 +99,9 @@ export interface ArticleData {
   thumbnailUrl?: string; // Image representing the article
   citation?: string; // Exact 1:1 source citation
   citations?: Citation[]; // List of specific citations found in text
-  topQuestions?: FaqItem[]; // Generated FAQs
+  topQuestions?: FaqItem[]; // generated FAQs
   ownerId?: string; // ID of the user who generated/saved this
+  audit?: AuditResult; // Cached audit result
 }
 
 export type SourceType = 'url' | 'pdf' | 'html' | 'docx';
