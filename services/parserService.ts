@@ -212,6 +212,50 @@ export const translateHtml = async (html: string, targetLanguage: string): Promi
   } catch (error) { return html; }
 };
 
+export const regenerateTextSegment = async (
+  originalText: string,
+  instruction: string,
+  fullContext: string,
+  mode: 'shorten' | 'expand' | 'rewrite' | 'custom'
+): Promise<string> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const basePrompt = `
+  You are an Expert Fact-Checked Reformulator. Your task is to reformulate the following text block using ONLY the provided context as the source of truth.
+  
+  ORIGINAL SEGMENT TO REFORMULATE:
+  "${originalText}"
+  
+  REFORMULATION GOAL:
+  ${mode === 'shorten' ? 'Reformulate into a significantly more concise, punchy version. Keep only the essential facts.' : ''}
+  ${mode === 'expand' ? 'Reformulate by adding depth and detail, making the narrative richer based on the context.' : ''}
+  ${mode === 'rewrite' ? 'Reformulate for professional flow, clarity, and engagement. Do not add external info.' : ''}
+  ${mode === 'custom' ? `Follow this specific reformulating instruction: "${instruction}"` : ''}
+
+  STRICT RULES:
+  1. Return ONLY the reformulated HTML snippet. NO preamble, NO meta-comments, NO markdown symbols (no **, no ##).
+  2. Maintain existing HTML tags if they wrap technical terms or citations.
+  3. YOU MUST BOLD ALL YEARS (e.g., <b>1999</b>, <b>2026</b>).
+  4. Factual accuracy is mandatory. If the instruction asks for info not in the context, stick to the context.
+  5. DO NOT mention any generic brands or locations unless they are specific historical entities from the context.
+  
+  FULL SOURCE CONTEXT (Ground Truth):
+  ${fullContext.substring(0, 10000)}
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: basePrompt,
+      config: {
+          thinkingConfig: { thinkingBudget: 0 } // Maximum speed for reformulation
+      }
+    });
+    return cleanMarkdownArtifacts(response.text || originalText, true);
+  } catch (e) {
+    return originalText;
+  }
+};
+
 export const generateQuizFromContent = async (text: string, language: string, imagesInArticle: string[] = [], difficulty: string = 'Intermediate', keywords?: string): Promise<Quiz[]> => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const prompt = `Create a high-quality quiz for ${difficulty} level in ${language}. Subject keywords: ${keywords || 'Article content'}. Return JSON ONLY. Bold years: <b>1899</b>. Text: ${text.substring(0, 25000)}`;

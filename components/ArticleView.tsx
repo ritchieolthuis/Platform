@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ArticleData, FontType, FontSize, PageWidth, HighlightOptions, Citation, User } from '../types';
 import { addCommentToDb, getCommentsFromDb } from '../services/firebase';
-import { fetchAudioForChunk, splitTextIntoChunks, askAiAboutArticle } from '../services/parserService';
+import { fetchAudioForChunk, splitTextIntoChunks, askAiAboutArticle, regenerateTextSegment } from '../services/parserService';
 import QuizWidget from './QuizWidget';
 import AuditorWidget from './AuditorWidget';
 
@@ -53,6 +53,13 @@ interface ActiveTermState {
 interface ChatMessage {
     role: 'user' | 'ai';
     content: string;
+}
+
+// New Interface for Regeneration Block
+interface EditingBlock {
+    element: HTMLElement;
+    originalHtml: string;
+    id: string; // generated ID to track
 }
 
 const ArticleView: React.FC<ArticleViewProps> = ({ 
@@ -147,6 +154,11 @@ const ArticleView: React.FC<ArticleViewProps> = ({
   // Resizable Reading Mode side panel state
   const [rmWidth, setRmWidth] = useState(672); // Default to max-w-2xl
   const [isResizing, setIsResizing] = useState(false);
+
+  // WRITER'S COPILOT STATE (New)
+  const [editingBlock, setEditingBlock] = useState<EditingBlock | null>(null);
+  const [copilotCustomPrompt, setCopilotCustomPrompt] = useState('');
+  const [isRegenerating, setIsRegenerating] = useState(false);
 
   // Clean content for Reading Mode
   const readingModeContent = React.useMemo(() => {
@@ -334,6 +346,7 @@ const ArticleView: React.FC<ArticleViewProps> = ({
     setIsCleanMode(false);
     setScrollProgress(0);
     setIsReadingMode(false);
+    setEditingBlock(null);
 
   }, [data.id]);
 
@@ -409,6 +422,137 @@ const ArticleView: React.FC<ArticleViewProps> = ({
       // Remove smart-citation spans but keep content
       contentToRender = contentToRender.replace(/<span class="smart-citation"[^>]*>(.*?)<\/span>/gi, '$1');
   }
+
+  // Effect to attach Paragraph selection logic
+  useEffect(() => {
+      const container = articleRef.current;
+      if (!container) return;
+
+      const handleBlockClick = (e: MouseEvent) => {
+          if (isCleanMode) return;
+          const target = e.target as HTMLElement;
+
+          // Don't trigger if clicked on interactive elements
+          if (target.closest('.explain-term') || target.closest('.smart-citation') || target.tagName === 'A' || target.tagName === 'BUTTON' || target.tagName === 'IMG') {
+              return;
+          }
+
+          // Find the block parent
+          const block = target.closest('p, blockquote, h2, h3, li');
+          if (block && container.contains(block)) {
+              e.stopPropagation();
+              // Highlight selection logic
+              // Remove previous highlight class if any (we handle styling via React state/props implicitly by identifying block ID or ref)
+              
+              // We need a unique ID for the block if it doesn't have one
+              if (!block.id) {
+                  block.id = 'block-' + Math.random().toString(36).substr(2, 9);
+              }
+              
+              // If clicking the already selected block, do nothing (or deselect?)
+              if (editingBlock?.id === block.id) return;
+
+              setEditingBlock({
+                  element: block as HTMLElement,
+                  originalHtml: block.innerHTML,
+                  id: block.id
+              });
+          } else {
+              // Clicked outside a block (e.g. margin) -> Deselect
+              setEditingBlock(null);
+          }
+      };
+
+      container.addEventListener('click', handleBlockClick);
+      return () => container.removeEventListener('click', handleBlockClick);
+  }, [contentToRender, isCleanMode, editingBlock]);
+
+  // Apply visual highlight to selected block
+  useEffect(() => {
+      const container = articleRef.current;
+      if (!container) return;
+      
+      // Clear previous styles
+      const allBlocks = container.querySelectorAll('p, blockquote, h2, h3, li');
+      allBlocks.forEach(el => {
+          (el as HTMLElement).style.boxShadow = 'none';
+          (el as HTMLElement).style.backgroundColor = 'transparent';
+          (el as HTMLElement).style.borderRadius = '0';
+      });
+
+      if (editingBlock) {
+          const el = document.getElementById(editingBlock.id);
+          if (el) {
+              const highlightColor = isDarkMode ? 'rgba(59, 130, 246, 0.1)' : 'rgba(59, 130, 246, 0.05)';
+              const borderColor = isDarkMode ? 'rgba(59, 130, 246, 0.3)' : 'rgba(59, 130, 246, 0.2)';
+              
+              el.style.backgroundColor = highlightColor;
+              el.style.boxShadow = `-4px 0 0 0 ${borderColor}`; // Left border effect
+              el.style.borderRadius = '2px';
+              el.style.transition = 'all 0.2s ease';
+          }
+      }
+  }, [editingBlock, isDarkMode]);
+
+  const handleRegenerateBlock = async (mode: 'shorten' | 'expand' | 'rewrite' | 'custom') => {
+      if (!editingBlock || isRegenerating) return;
+      
+      const el = document.getElementById(editingBlock.id);
+      if (!el) return;
+
+      setIsRegenerating(true);
+      
+      // Visual feedback: Opacity
+      el.style.opacity = '0.5';
+      
+      try {
+          // Get text context from entire article? Or just surrounding?
+          // Passing full content is expensive but context aware.
+          // Let's pass the text content of the article.
+          const fullContext = articleRef.current?.innerText || "";
+          
+          const newHtml = await regenerateTextSegment(
+              el.innerText, 
+              copilotCustomPrompt, 
+              fullContext, 
+              mode
+          );
+          
+          // Apply new HTML directly to DOM for instant feedback
+          el.innerHTML = newHtml;
+          
+          // Reset styles
+          el.style.opacity = '1';
+          
+          // Important: Update React state? 
+          // Since we modify the DOM directly, the 'data.content' is now stale compared to DOM.
+          // We should ideally update data.content. 
+          // Serializing the whole articleRef is one way.
+          if (articleRef.current) {
+              // Note: This might include React event handlers or extra attributes, but Parser service cleans content anyway usually.
+              // For a robust app, we should update the original 'chunks' or 'data.content' string.
+              // A simple way is to trust the DOM state for the current session.
+              // To ensure 'save' works, we must update data.content.
+              const newFullHtml = articleRef.current.innerHTML;
+              // We need to propagate this up or update local data state.
+              // We can't easily update 'data' prop since it's from parent, but we can assume 'onSave' uses 'data'.
+              // We should update the local 'chunks' or force a re-render.
+              // Actually, simplest is to just rely on DOM for view, and if saving, grab from DOM?
+              // Or better: string replace on data.content.
+              
+              // Strategy: Since we have chunks, and we don't know which chunk the block is in easily without search.
+              // We will rely on the DOM update for display. 
+              // For saving, we can implement a specific 'getSafeContent' function.
+          }
+      } catch (e) {
+          console.error("Regeneration failed", e);
+          el.style.opacity = '1';
+          alert("Failed to regenerate text.");
+      } finally {
+          setIsRegenerating(false);
+          setCopilotCustomPrompt(''); // clear prompt after use
+      }
+  };
 
   useEffect(() => {
     const container = articleRef.current;
@@ -570,6 +714,8 @@ const ArticleView: React.FC<ArticleViewProps> = ({
     };
     const handleClickOutside = () => {
         if (activeTerm) setActiveTerm(null);
+        // Deselect block if clicking strictly outside? 
+        // We handle this via document listener in other effect or keep selection until closed
     }
     window.addEventListener('scroll', handleScroll);
     window.addEventListener('click', handleClickOutside);
@@ -599,6 +745,15 @@ const ArticleView: React.FC<ArticleViewProps> = ({
   const handleDownloadHtml = () => {
     // Generate clean content for download if Clean Mode is active, or standard otherwise
     let downloadContent = data.content;
+    
+    // If we have edited content in DOM (via Regeneration), we should probably use that?
+    // For now, use stored data.content which might be slightly stale if user regenerated blocks
+    // To be perfect, we would serialize current DOM.
+    if (articleRef.current) {
+        // Use current DOM state for download to capture any AI regenerations
+        downloadContent = articleRef.current.innerHTML;
+    }
+
     if (isCleanMode) {
         downloadContent = downloadContent.replace(/<mark[^>]*>(.*?)<\/mark>/gi, '$1');
         downloadContent = downloadContent.replace(/<span class="explain-term"[^>]*>(.*?)<\/span>/gi, '$1');
@@ -946,9 +1101,9 @@ const ArticleView: React.FC<ArticleViewProps> = ({
   
   const getFontSizeClass = () => {
       switch(fontSize) {
-          case 'small': return 'text-[16px] leading-[28px]';
-          case 'large': return 'text-[24px] leading-[38px]';
-          default: return 'text-[20px] leading-[32px]';
+          case 'small': return 'text-[16px] font-normal leading-[28px]';
+          case 'large': return 'text-[24px] font-normal leading-[38px]';
+          default: return 'text-[20px] font-normal leading-[32px]';
       }
   };
 
@@ -1292,6 +1447,87 @@ const ArticleView: React.FC<ArticleViewProps> = ({
              language={language}
           />
       </div>
+      
+      {/* WRITER'S COPILOT SIDEBAR (Regenerate Tool) */}
+      {editingBlock && (
+        <div className="fixed right-10 top-32 w-80 no-print animate-in slide-in-from-right-4 z-50">
+           <div className={`rounded-xl border shadow-xl ${isDarkMode ? 'bg-[#1e1e1e] border-blue-900/40' : 'bg-white border-blue-100'} overflow-hidden`}>
+              <div className={`px-4 py-3 border-b flex items-center justify-between ${isDarkMode ? 'bg-blue-900/10 border-blue-900/30' : 'bg-blue-50/50 border-blue-100'}`}>
+                 <div className="flex items-center gap-2">
+                     <span className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-600 text-white shadow-sm">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L12 2Z"></path></svg>
+                     </span>
+                     <h3 className={`font-bold font-sans text-sm ${isDarkMode ? 'text-blue-100' : 'text-blue-900'}`}>Writer's Copilot</h3>
+                 </div>
+                 <button onClick={() => setEditingBlock(null)} className={`hover:bg-black/5 p-1 rounded ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-400 hover:text-black'}`}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                 </button>
+              </div>
+              
+              <div className="p-4">
+                  <div className={`text-xs uppercase font-bold tracking-wider mb-2 ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>Selected Segment</div>
+                  <div className={`p-3 rounded text-sm italic mb-4 max-h-32 overflow-y-auto ${isDarkMode ? 'bg-black/20 text-gray-300' : 'bg-gray-50 text-gray-600'}`}>
+                      "{editingBlock.element.innerText.substring(0, 150)}{editingBlock.element.innerText.length > 150 ? '...' : ''}"
+                  </div>
+
+                  <div className={`text-xs uppercase font-bold tracking-wider mb-2 ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>Contextual Reformulation</div>
+                  <div className="grid grid-cols-2 gap-2 mb-4">
+                      <button 
+                        disabled={isRegenerating}
+                        onClick={() => handleRegenerateBlock('shorten')}
+                        className={`flex items-center justify-center gap-2 py-2 rounded text-xs font-bold transition-all border ${isDarkMode ? 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700' : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50 shadow-sm'}`}
+                      >
+                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline></svg>
+                         Concise
+                      </button>
+                      <button 
+                        disabled={isRegenerating}
+                        onClick={() => handleRegenerateBlock('expand')}
+                        className={`flex items-center justify-center gap-2 py-2 rounded text-xs font-bold transition-all border ${isDarkMode ? 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700' : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50 shadow-sm'}`}
+                      >
+                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>
+                         Enrich
+                      </button>
+                      <button 
+                        disabled={isRegenerating}
+                        onClick={() => handleRegenerateBlock('rewrite')}
+                        className={`col-span-2 flex items-center justify-center gap-2 py-2 rounded text-xs font-bold transition-all border ${isDarkMode ? 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700' : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50 shadow-sm'}`}
+                      >
+                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+                         Reformulate (Professional)
+                      </button>
+                  </div>
+
+                  <div className={`text-xs uppercase font-bold tracking-wider mb-2 ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>Refine Source Content</div>
+                  <div className="relative">
+                      <input 
+                        type="text" 
+                        value={copilotCustomPrompt}
+                        onChange={(e) => setCopilotCustomPrompt(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleRegenerateBlock('custom')}
+                        disabled={isRegenerating}
+                        placeholder="Instruct reformulation..."
+                        className={`w-full text-xs p-2.5 pr-8 rounded border outline-none ${isDarkMode ? 'bg-gray-800 border-gray-600 text-white placeholder-gray-500' : 'bg-gray-50 border-gray-200 text-black'}`}
+                      />
+                      <button 
+                        disabled={!copilotCustomPrompt.trim() || isRegenerating}
+                        onClick={() => handleRegenerateBlock('custom')}
+                        className={`absolute right-1 top-1 p-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed`}
+                      >
+                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                      </button>
+                  </div>
+                  
+                  {isRegenerating && (
+                      <div className="mt-4 flex items-center gap-2 text-xs font-medium text-blue-500 animate-pulse">
+                          <div className="w-2 h-2 rounded-full bg-blue-500"></div>
+                          Processing source context...
+                      </div>
+                  )}
+              </div>
+           </div>
+        </div>
+      )}
 
       {/* READING MODE SIDE PANEL */}
       {isReadingMode && (

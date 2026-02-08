@@ -1,18 +1,16 @@
-
-
 import { initializeApp } from 'firebase/app';
 import { getFirestore, doc, setDoc, getDoc, collection, getDocs, query, orderBy, addDoc, where } from 'firebase/firestore';
 import { ArticleData, User, UserSettings } from '../types';
 
 // --- Configuration ---
 const firebaseConfig = {
-  apiKey: "AIzaSyDq6kR16T32oti8NySxnHLU7o7K64sxJx8",
-  authDomain: "platform-c2b92.firebaseapp.com",
-  projectId: "platform-c2b92",
-  storageBucket: "platform-c2b92.firebasestorage.app",
-  messagingSenderId: "156168372139",
-  appId: "1:156168372139:web:508ce45f6fe82bd05a9cee",
-  measurementId: "G-LDJSSVRTXX"
+  apiKey: "AIzaSyAJG1FyJbgkxSrQZLNPZ07WPHoWFy9lwqs",
+  authDomain: "lumeareader.firebaseapp.com",
+  projectId: "lumeareader",
+  storageBucket: "lumeareader.firebasestorage.app",
+  messagingSenderId: "60747328954",
+  appId: "1:60747328954:web:581c8c873ab792c6880183",
+  measurementId: "G-2D4F9VBM7D"
 };
 
 let db: any = null;
