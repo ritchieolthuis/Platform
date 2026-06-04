@@ -1855,7 +1855,8 @@ const ArticleView: React.FC<ArticleViewProps> = ({
                   {t('quickSummary')}
               </button>
           </div>
-          
+        </header>
+
           <div className="flex items-center justify-between mb-8 no-print border-b pb-8 border-gray-100 dark:border-gray-800">
               <div className="flex items-center space-x-3">
                   <div className={`w-10 h-10 rounded-full ${isDarkMode ? 'bg-gray-800' : 'bg-gray-100'} overflow-hidden flex items-center justify-center text-gray-500`}>
