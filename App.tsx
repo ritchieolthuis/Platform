@@ -5,6 +5,8 @@ import ArticleView from './components/ArticleView';
 import SettingsPanel from './components/SettingsPanel';
 import LibraryView from './components/LibraryView';
 import AuditDashboard from './components/AuditDashboard';
+import TextDiffEditor from './components/TextDiffEditor';
+import DiffEditorDemo from './components/DiffEditorDemo';
 import { ArticleData, SourceType, HighlightOptions, User, UserSettings, WritingStyle, ColorMode, FontType, ReadingLevel, AuditResult, DeepAuditResult } from './types';
 import { processSource, translateHtml, runIntegrityCheck, runDeepAnalysis } from './services/parserService';
 import { ensureUserInDb, saveArticleToLibrary, getLibraryFromDb, saveUserSettings, getUserSettings } from './services/firebase';
@@ -186,7 +188,8 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [loadingMessage, setLoadingMessage] = useState('');
-  const [currentView, setCurrentView] = useState<'home' | 'library' | 'auditor'>('home');
+  const [currentView, setCurrentView] = useState<'home' | 'library' | 'auditor' | 'diff-editor'>('home');
+  const [diffEditorData, setDiffEditorData] = useState({ original: '', improved: '' });
   const [showSettings, setShowSettings] = useState(false);
   const [globalAiQuery, setGlobalAiQuery] = useState<string>(''); 
   const [triggerAiPanel, setTriggerAiPanel] = useState<number>(0);
@@ -447,6 +450,10 @@ export default function App() {
   const handleAiQuery = (query: string) => { setGlobalAiQuery(query); setCurrentView('home'); };
   const handleOpenAiPanel = () => { if (currentView !== 'home') setCurrentView('home'); setTriggerAiPanel(prev => prev + 1); }
   const handleNavigateHome = () => { setCurrentView('home'); setData({ id: '', title: "", content: "", excerpt: "" }); };
+  const handleNavigateToDiff = (original: string, improved: string) => {
+    setDiffEditorData({ original, improved });
+    setCurrentView('diff-editor');
+  };
 
   const isCurrentArticleSaved = library.some(item => item.id === data.id);
 
@@ -488,12 +495,29 @@ export default function App() {
       <main className="w-full">
         {currentView === 'home' && (
            <div className="flex flex-col">
-              {!data.content && <div className="max-w-[800px] mx-auto mt-16 px-6"><IntegrityCheckerHero /></div>}
+              {!data.content && <div className="max-w-[800px] mx-auto mt-16 px-6">
+                <DiffEditorDemo isDarkMode={isDarkMode} onNavigateToDiff={handleNavigateToDiff} />
+                <IntegrityCheckerHero />
+              </div>}
               <ArticleView data={data} loading={false} onSave={user ? handleSaveToLibrary : undefined} isSaved={isCurrentArticleSaved} isDarkMode={isDarkMode} font={settings.font} fontSize={settings.fontSize} pageWidth={settings.pageWidth} onTitleChange={handleTitleUpdate} globalAiQuery={globalAiQuery} onGlobalAiQueryHandled={() => setGlobalAiQuery('')} highlightOptions={settings.highlightOptions} triggerAiPanel={triggerAiPanel} t={t} onNavigateLibrary={() => setCurrentView('library')} onNavigateHome={handleNavigateHome} onLoadDemo={(url, title) => handleProcess('url', url, title)} dailyHighlights={dailyHighlights} language={settings.language} currentUser={user} />
            </div>
         )}
         {currentView === 'library' && <LibraryView articles={library} onSelect={handleSelectFromLibrary} isDarkMode={isDarkMode} font={settings.font} t={t} />}
         {currentView === 'auditor' && <AuditDashboard data={data} auditResult={auditResults.result} deepResult={auditResults.deep} language={settings.language} isDarkMode={isDarkMode} onBack={handleNavigateHome} />}
+        {currentView === 'diff-editor' && (
+          <div className={`min-h-screen ${isDarkMode ? 'bg-[#121212]' : 'bg-white'}`}>
+            <button onClick={handleNavigateHome} className={`m-6 px-4 py-2 rounded ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-gray-200 text-black'}`}>
+              ← Back
+            </button>
+            <div className={isDarkMode ? 'text-white' : 'text-black'}>
+              <TextDiffEditor
+                originalText={diffEditorData.original}
+                improvedText={diffEditorData.improved}
+                onApply={(updated) => setDiffEditorData(prev => ({ ...prev, original: updated }))}
+              />
+            </div>
+          </div>
+        )}
       </main>
     </div>
   );
